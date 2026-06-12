@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>歴史ログ</title>
+<style>
+  :root{
+    --bg:#f6f3ec; --surface:#ffffff; --ink:#2c2722; --muted:#7c736a;
+    --line:#e5ded2; --accent:#7a5c3e; --accent-soft:#efe7da;
+    --new:#1d7a55; --new-soft:#e1f1ea; --danger:#a3402d;
+    --radius:14px; --shadow:0 1px 2px rgba(0,0,0,.05);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.7;
+    padding-bottom:76px; -webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:640px;margin:0 auto;padding:16px}
+  header.app{
+    position:sticky;top:0;z-index:5;background:var(--bg);
+    padding:14px 16px 10px;border-bottom:1px solid var(--line);
+    display:flex;align-items:baseline;gap:8px
+  }
+  header.app h1{font-size:19px;margin:0;font-weight:600;letter-spacing:.02em}
+  header.app .sub{font-size:12px;color:var(--muted)}
+
+  /* views */
+  .view{display:none}
+  .view.active{display:block}
+
+  /* record */
+  textarea{
+    width:100%;min-height:160px;padding:14px;border:1px solid var(--line);
+    border-radius:var(--radius);font-size:16px;font-family:inherit;line-height:1.7;
+    background:var(--surface);resize:vertical;color:var(--ink)
+  }
+  textarea:focus,input:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:8px;align-items:center;margin-top:10px}
+  input.src{
+    flex:1;padding:11px 12px;border:1px solid var(--line);border-radius:10px;
+    font-size:15px;background:var(--surface);font-family:inherit;color:var(--ink)
+  }
+  .label{font-size:13px;color:var(--muted);margin:4px 2px}
+  button.primary{
+    width:100%;margin-top:12px;padding:15px;border:none;border-radius:var(--radius);
+    background:var(--accent);color:#fff;font-size:17px;font-weight:600;
+    font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px
+  }
+  button.primary:disabled{opacity:.55}
+  .result{
+    margin-top:14px;padding:13px 14px;border-radius:12px;background:var(--new-soft);
+    color:var(--new);font-size:14px;display:none;border:1px solid #cfe8dd
+  }
+  .result.err{background:#f7e7e3;color:var(--danger);border-color:#eccabf}
+  .result.show{display:block}
+  .spinner{
+    width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);
+    border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* filters */
+  .chips{display:flex;gap:8px;overflow-x:auto;padding:4px 0 10px;-webkit-overflow-scrolling:touch}
+  .chip{
+    flex:0 0 auto;padding:6px 13px;border-radius:20px;border:1px solid var(--line);
+    background:var(--surface);font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap
+  }
+  .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+  /* timeline */
+  .tl{position:relative;margin-left:6px;padding-left:20px;border-left:2px solid var(--line)}
+  .tl-item{position:relative;padding:0 0 18px}
+  .tl-item::before{
+    content:"";position:absolute;left:-27px;top:5px;width:11px;height:11px;border-radius:50%;
+    background:var(--accent);border:2px solid var(--bg)
+  }
+  .tl-era{font-size:12px;color:var(--muted)}
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    padding:12px 14px;margin-top:4px;cursor:pointer;box-shadow:var(--shadow)
+  }
+  .card .name{font-size:16px;font-weight:600}
+  .card .meta{font-size:12px;color:var(--muted);margin-top:2px}
+  .tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;background:var(--accent-soft);color:var(--accent);margin-right:5px}
+  .count{color:var(--accent);font-weight:600}
+  .empty{text-align:center;color:var(--muted);padding:48px 16px;font-size:14px}
+
+  /* detail overlay */
+  .overlay{
+    position:fixed;inset:0;background:rgba(40,34,28,.45);z-index:20;display:none;
+    align-items:flex-end;justify-content:center
+  }
+  .overlay.show{display:flex}
+  .sheet{
+    background:var(--bg);width:100%;max-width:640px;max-height:90vh;overflow-y:auto;
+    border-radius:20px 20px 0 0;padding:20px 18px 40px;-webkit-overflow-scrolling:touch
+  }
+  .sheet .close{float:right;border:none;background:none;font-size:26px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px}
+  .sheet h2{font-size:21px;margin:4px 0 2px}
+  .sheet .d-meta{font-size:13px;color:var(--muted);margin-bottom:14px}
+  .summary{background:var(--accent-soft);border-radius:12px;padding:13px 14px;font-size:15px;margin-bottom:18px}
+  .layers-h{font-size:13px;color:var(--muted);margin-bottom:10px}
+  .layer{border-left:2px solid var(--line);padding:0 0 14px 14px;position:relative}
+  .layer::before{content:"";position:absolute;left:-5px;top:6px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+  .layer .when{font-size:11px;color:var(--muted)}
+  .layer .fact{font-size:15px}
+  .del{margin-top:20px;width:100%;padding:12px;border:1px solid #eccabf;background:#f7e7e3;color:var(--danger);border-radius:12px;font-size:14px;font-family:inherit;cursor:pointer}
+
+  /* settings */
+  .field{margin-bottom:18px}
+  .field label{display:block;font-size:14px;font-weight:600;margin-bottom:6px}
+  .field .hint{font-size:12px;color:var(--muted);margin-bottom:8px}
+  .field input{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);font-family:inherit;color:var(--ink)}
+  .saved{font-size:13px;color:var(--new);margin-top:6px;display:none}
+  .saved.show{display:inline}
+
+  /* bottom nav */
+  nav.tabs{
+    position:fixed;bottom:0;left:0;right:0;z-index:10;background:var(--surface);
+    border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom)
+  }
+  nav.tabs button{
+    flex:1;border:none;background:none;padding:11px 4px 9px;font-family:inherit;
+    font-size:11px;color:var(--muted);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px
+  }
+  nav.tabs button .ic{font-size:21px;line-height:1}
+  nav.tabs button.on{color:var(--accent)}
+
+  /* auth */
+  #auth-screen{position:fixed;inset:0;background:var(--bg);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px}
+  #auth-screen.hide{display:none}
+  .auth-card{width:100%;max-width:360px;text-align:center}
+  .auth-card h1{font-size:27px;margin:0;letter-spacing:.03em}
+  .auth-sub{font-size:13px;color:var(--muted);margin:8px 0 26px}
+  .auth-card input{width:100%;padding:14px;margin-bottom:10px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:var(--surface);font-family:inherit;color:var(--ink)}
+  .auth-card input:focus{outline:none;border-color:var(--accent)}
+  .auth-alt{margin-top:14px;background:none;border:none;color:var(--accent);font-size:14px;font-family:inherit;cursor:pointer;text-decoration:underline}
+  .auth-msg{margin-top:16px;font-size:14px;min-height:20px;line-height:1.5}
+  .auth-msg.err{color:var(--danger)}
+  .auth-msg.ok{color:var(--new)}
+  .btn-logout{margin-top:14px;width:100%;padding:12px;border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:10px;font-size:14px;font-family:inherit;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="auth-screen">
+  <div class="auth-card">
+    <h1>歴史ログ</h1>
+    <p class="auth-sub">聴いた歴史が育つ、あなただけのデータベース</p>
+    <input id="au-email" type="email" placeholder="メールアドレス" autocomplete="username">
+    <input id="au-pass" type="password" placeholder="パスワード（6文字以上）" autocomplete="current-password">
+    <button class="primary" id="au-login" style="margin-top:4px">ログイン</button>
+    <button class="auth-alt" id="au-signup">初めての方はこちら（新規登録）</button>
+    <div class="auth-msg" id="au-msg"></div>
+  </div>
+</div>
+
+<header class="app"><h1>歴史ログ</h1><span class="sub">聴いた歴史が育つ</span></header>
+
+<div class="wrap">
+
+  <!-- 記録 -->
+  <section id="v-record" class="view active">
+    <div class="label">今日聴いたこと（文字起こしを貼り付け）</div>
+    <textarea id="raw" placeholder="ポッドキャストの文字起こしや、聴いた内容のメモを貼り付けてください…"></textarea>
+    <div class="row">
+      <input class="src" id="src" placeholder="出典（任意・例: 〇〇ラジオ 第12回）">
+    </div>
+    <button class="primary" id="btn-update"><span id="btn-label">更新する</span></button>
+    <div class="result" id="result"></div>
+  </section>
+
+  <!-- 年表 -->
+  <section id="v-timeline" class="view">
+    <div class="chips" id="chips"></div>
+    <div id="tl-wrap"></div>
+  </section>
+
+  <!-- 設定 -->
+  <section id="v-settings" class="view">
+    <div class="field">
+      <label>Gemini APIキー</label>
+      <div class="hint">この端末だけに保存されます（公開されません）。家計簿アプリと同じキーでOK。</div>
+      <input id="gkey" type="password" placeholder="AIza... で始まるキー">
+      <div class="saved" id="gsaved">保存しました</div>
+    </div>
+    <button class="primary" id="btn-savekey" style="background:var(--accent)">キーを保存</button>
+    <div class="field" style="margin-top:28px">
+      <div class="hint">データはSupabaseに保存され、ログインすればスマホ・PCどちらからでも同じものが見られます。貼った元の文章も丸ごと保存されるので、振り分けが変でもやり直せます。</div>
+    </div>
+    <div class="field">
+      <div class="hint" id="who"></div>
+      <button class="btn-logout" id="btn-logout">ログアウト</button>
+    </div>
+  </section>
+
+</div>
+
+<nav class="tabs">
+  <button data-view="record" class="on"><span class="ic">✎</span>記録</button>
+  <button data-view="timeline"><span class="ic">≡</span>年表</button>
+  <button data-view="settings"><span class="ic">⚙</span>設定</button>
+</nav>
+
+<!-- 項目詳細 -->
+<div class="overlay" id="overlay">
+  <div class="sheet" id="sheet"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = 'https://icxbyltorjpfexmwxzga.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_6qgfCo_xbhbjb3Lr__j-Yg_Y7Zk2yWH';
+const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const GEMINI_MODEL = 'gemini-2.5-flash';
+
+const $ = s => document.querySelector(s);
+const esc = s => (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const norm = s => (s||'').trim();
+
+/* ---------- タブ切替 ---------- */
+let activeFilter = 'すべて';
+document.querySelectorAll('nav.tabs button').forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    const v = b.dataset.view;
+    document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
+    $('#v-'+v).classList.add('active');
+    if(v==='timeline') loadTimeline();
+  };
+});
+
+/* ---------- 設定（Geminiキー） ---------- */
+$('#gkey').value = localStorage.getItem('gemini_key') || '';
+$('#btn-savekey').onclick = ()=>{
+  localStorage.setItem('gemini_key', $('#gkey').value.trim());
+  const s=$('#gsaved'); s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),1800);
+};
+
+/* ---------- Gemini 呼び出し ---------- */
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+async function geminiCall(prompt){
+  const key = localStorage.getItem('gemini_key');
+  if(!key) throw new Error('NO_KEY');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
+  const body = JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig:{ responseMimeType:'application/json', temperature:0.2 } });
+  let lastErr;
+  for(let attempt=0; attempt<4; attempt++){
+    if(attempt>0){ $('#btn-label').textContent='混雑のため再試行中…'; await sleep(900*Math.pow(2,attempt-1)); }
+    let res;
+    try{ res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body}); }
+    catch(e){ lastErr=e; continue; }
+    if(res.ok) return res;
+    const t = await res.text().catch(()=>'');
+    lastErr = new Error('GEMINI '+res.status+': '+t.slice(0,160));
+    if([429,500,503].includes(res.status)) continue;   // 一時的なものは再試行
+    throw lastErr;                                       // それ以外は即エラー
+  }
+  throw lastErr;
+}
+
+async function extractItems(rawText, existingItems){
+  const existingList = existingItems.length
+    ? existingItems.map(i=>`- ${i.name}${i.summary?'：'+i.summary:''}`).join('\n')
+    : '（まだありません）';
+  const prompt = `あなたは歴史データベースの整理係です。下の「今日のテキスト」から、歴史上の項目（人物・出来事・テーマ・地域・その他）を抽出してください。
+
+【既存の項目リスト】同じ対象を指すならこの名前をそのまま使い、重複を作らないこと。
+${existingList}
+
+【今日のテキスト】
+"""
+${rawText}
+"""
+
+各項目について次をJSONで返してください。キーは items（配列）。各要素:
+- name: 項目名。既存リストに同じ対象があればその名前を使う。人物は一般的な表記に正規化（例「信長」→「織田信長」）。
+- type: 「人物」「出来事」「テーマ」「地域」「その他」のいずれか。
+- sort_year: 並べ替え用の代表年。西暦の整数。紀元前はマイナス（例 紀元前49年→-49、1560年→1560）。不明なら null。
+- era_label: 表示用の年代ラベル（例「紀元前49年」「室町時代」「1世紀頃」）。不明なら空文字。
+- region: 地域（例「ローマ」「日本」）。不明なら空文字。
+- theme: テーマ/ジャンル（例「ローマ史」「戦国」「科学史」）。テキスト全体の文脈から推定。
+- new_fact: 今日のテキストから分かるこの項目の事実を1〜2文で簡潔に。
+- updated_summary: この項目の要約。既存要約があれば new_fact を統合して書き直す。なければ new_fact を元に新規作成。3文以内。
+
+注意: 実質的な歴史的内容が無いものは項目にしない。出力はJSONのみ。`;
+
+  const res = await geminiCall(prompt);
+  const data = await res.json();
+  let txt = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  txt = txt.replace(/^```json\s*/i,'').replace(/```$/,'').trim();
+  const parsed = JSON.parse(txt);
+  return Array.isArray(parsed) ? parsed : (parsed.items || []);
+}
+
+/* ---------- 更新フロー ---------- */
+$('#btn-update').onclick = async ()=>{
+  const raw = $('#raw').value.trim();
+  if(!raw){ showResult('テキストを貼り付けてください。', true); return; }
+  if(!localStorage.getItem('gemini_key')){ showResult('先に「設定」でGemini APIキーを保存してください。', true); return; }
+
+  setLoading(true);
+  hideResult();
+  try{
+    // 1) 既存項目を取得（AIに渡して重複防止）
+    const { data: existing, error: e2 } = await supa.from('hist_items').select('id,name,summary');
+    if(e2) throw e2;
+    const map = new Map(existing.map(i=>[norm(i.name).toLowerCase(), i]));
+
+    // 2) AIで抽出（混雑時は自動で数回リトライ）
+    const items = await extractItems(raw, existing);
+    if(!items.length){ showResult('歴史的な項目を見つけられませんでした。文章を変えて試してみてください。', true); setLoading(false); return; }
+
+    // 3) AI成功後に元テキストを保存（やり直し用に丸ごと残す。失敗時は無駄な重複を残さない）
+    const { data: entry, error: e1 } = await supa
+      .from('hist_entries').insert({ raw_text: raw, source: $('#src').value.trim() || null, user_id: currentUid })
+      .select().single();
+    if(e1) throw e1;
+
+    // 4) 項目をupsert＋知識の層を追加
+    let grew=0, born=0;
+    for(const it of items){
+      const name = norm(it.name);
+      if(!name) continue;
+      const fields = {
+        type: it.type||'その他', name,
+        sort_year: Number.isFinite(it.sort_year)? Math.round(it.sort_year): null,
+        era_label: it.era_label||'', region: it.region||'', theme: it.theme||'',
+        summary: it.updated_summary||it.new_fact||'', user_id: currentUid
+      };
+      const key = name.toLowerCase();
+      let itemId;
+      if(map.has(key)){
+        const ex = map.get(key);
+        await supa.from('hist_items').update({...fields, updated_at:new Date().toISOString()}).eq('id', ex.id);
+        itemId = ex.id; grew++;
+      }else{
+        const { data: ni, error:e3 } = await supa.from('hist_items').insert(fields).select().single();
+        if(e3) throw e3;
+        itemId = ni.id; born++;
+        map.set(key, ni);
+      }
+      if(it.new_fact){
+        await supa.from('hist_facts').insert({ item_id:itemId, entry_id:entry.id, fact_text: it.new_fact, user_id: currentUid });
+      }
+    }
+
+    $('#raw').value=''; $('#src').value='';
+    showResult(`✨ ${grew}項目が育ち、${born}項目が新しく生まれました。`, false);
+  }catch(err){
+    console.error(err);
+    if(err.message==='NO_KEY') showResult('Gemini APIキーが未設定です。「設定」で保存してください。', true);
+    else if(/503|UNAVAILABLE|high demand|overload|429/i.test(err.message||'')) showResult('Geminiが今とても混み合っています。少し時間をおいて、もう一度「更新する」を押してください。（あなたのテキストは消えていません）', true);
+    else showResult('うまくいきませんでした：'+(err.message||err), true);
+  }
+  setLoading(false);
+};
+
+function setLoading(on){
+  $('#btn-update').disabled = on;
+  $('#btn-label').innerHTML = on ? '<span class="spinner"></span>' : '更新する';
+}
+function showResult(msg, isErr){
+  const r=$('#result'); r.textContent=msg; r.className='result show'+(isErr?' err':'');
+}
+function hideResult(){ $('#result').className='result'; }
+
+/* ---------- 年表 ---------- */
+let allItems=[], factCounts={};
+async function loadTimeline(){
+  const wrap=$('#tl-wrap');
+  wrap.innerHTML='<div class="empty">読み込み中…</div>';
+  const { data: items, error } = await supa.from('hist_items')
+    .select('*').order('sort_year',{ascending:true,nullsFirst:false});
+  if(error){ wrap.innerHTML='<div class="empty">読み込みに失敗しました</div>'; return; }
+  allItems = items||[];
+  // fact数
+  const { data: facts } = await supa.from('hist_facts').select('item_id');
+  factCounts={}; (facts||[]).forEach(f=>factCounts[f.item_id]=(factCounts[f.item_id]||0)+1);
+  renderChips(); renderTimeline();
+}
+function renderChips(){
+  const themes = [...new Set(allItems.map(i=>i.theme).filter(Boolean))];
+  const chips=['すべて',...themes];
+  if(!chips.includes(activeFilter)) activeFilter='すべて';
+  $('#chips').innerHTML = chips.map(c=>`<div class="chip${c===activeFilter?' on':''}" data-c="${esc(c)}">${esc(c)}</div>`).join('');
+  $('#chips').querySelectorAll('.chip').forEach(ch=>ch.onclick=()=>{activeFilter=ch.dataset.c;renderChips();renderTimeline();});
+}
+function renderTimeline(){
+  const wrap=$('#tl-wrap');
+  let list = activeFilter==='すべて'? allItems : allItems.filter(i=>i.theme===activeFilter);
+  if(!list.length){ wrap.innerHTML='<div class="empty">まだ項目がありません。<br>「記録」から聴いた内容を貼って更新してみましょう。</div>'; return; }
+  wrap.innerHTML = '<div class="tl">'+list.map(i=>`
+    <div class="tl-item">
+      <div class="tl-era">${esc(i.era_label||'年代不明')}</div>
+      <div class="card" data-id="${i.id}">
+        <div class="name">${esc(i.name)}</div>
+        <div class="meta"><span class="tag">${esc(i.type||'その他')}</span>${i.region?esc(i.region)+' ・ ':''}<span class="count">${factCounts[i.id]||0}件の情報</span></div>
+      </div>
+    </div>`).join('')+'</div>';
+  wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
+}
+
+/* ---------- 項目詳細 ---------- */
+async function openDetail(id){
+  const item = allItems.find(i=>String(i.id)===String(id));
+  if(!item) return;
+  const { data: facts } = await supa.from('hist_facts').select('*').eq('item_id',id).order('added_date',{ascending:true});
+  const layers = (facts||[]).map(f=>`
+    <div class="layer">
+      <div class="when">${fmtDate(f.added_date)}に追加</div>
+      <div class="fact">${esc(f.fact_text)}</div>
+    </div>`).join('') || '<div class="empty" style="padding:20px">情報がまだありません</div>';
+  const meta = [item.era_label, item.region, item.theme].filter(Boolean).join(' ・ ');
+  $('#sheet').innerHTML = `
+    <button class="close" id="d-close">×</button>
+    <div class="tag">${esc(item.type||'その他')}</div>
+    <h2>${esc(item.name)}</h2>
+    <div class="d-meta">${esc(meta)}</div>
+    ${item.summary?`<div class="summary">${esc(item.summary)}</div>`:''}
+    <div class="layers-h">積み重なった知識</div>
+    ${layers}
+    <button class="del" id="d-del">この項目を削除</button>`;
+  $('#d-close').onclick=closeDetail;
+  $('#d-del').onclick=async()=>{
+    if(!confirm(`「${item.name}」を削除しますか？（この項目の情報も消えます）`)) return;
+    await supa.from('hist_items').delete().eq('id',id);
+    closeDetail(); loadTimeline();
+  };
+  $('#overlay').classList.add('show');
+}
+function closeDetail(){ $('#overlay').classList.remove('show'); }
+$('#overlay').onclick=e=>{ if(e.target===$('#overlay')) closeDetail(); };
+function fmtDate(s){ const d=new Date(s); return `${d.getMonth()+1}月${d.getDate()}日`; }
+
+/* ---------- 認証（ログイン制） ---------- */
+let currentUid = null;
+const authScreen = $('#auth-screen');
+function authMsg(m, ok){ const e=$('#au-msg'); e.textContent=m; e.className='auth-msg'+(m?(ok?' ok':' err'):''); }
+
+supa.auth.onAuthStateChange((_e, session)=>{
+  if(session && session.user){
+    currentUid = session.user.id;
+    authScreen.classList.add('hide');
+    $('#who').textContent = 'ログイン中：'+(session.user.email||'');
+  }else{
+    currentUid = null;
+    authScreen.classList.remove('hide');
+  }
+});
+
+(async ()=>{
+  const { data } = await supa.auth.getSession();
+  if(data.session && data.session.user){
+    currentUid = data.session.user.id;
+    authScreen.classList.add('hide');
+    $('#who').textContent = 'ログイン中：'+(data.session.user.email||'');
+  }else{
+    authScreen.classList.remove('hide');
+  }
+})();
+
+$('#au-login').onclick = async ()=>{
+  authMsg('');
+  const email=$('#au-email').value.trim(), pass=$('#au-pass').value;
+  if(!email||!pass){ authMsg('メールとパスワードを入れてください'); return; }
+  $('#au-login').disabled=true;
+  const { error } = await supa.auth.signInWithPassword({ email, password: pass });
+  $('#au-login').disabled=false;
+  if(error) authMsg('ログインできませんでした：'+error.message);
+};
+$('#au-signup').onclick = async ()=>{
+  authMsg('');
+  const email=$('#au-email').value.trim(), pass=$('#au-pass').value;
+  if(!email||!pass){ authMsg('メールとパスワードを入れてください'); return; }
+  if(pass.length<6){ authMsg('パスワードは6文字以上にしてください'); return; }
+  const { data, error } = await supa.auth.signUp({ email, password: pass });
+  if(error){ authMsg('登録できませんでした：'+error.message); return; }
+  if(data.session) authMsg('登録してログインしました。', true);
+  else authMsg('確認メールを送りました。メール内のリンクを押したあと、ここで同じメール・パスワードで「ログイン」してください。', true);
+};
+$('#btn-logout').onclick = async ()=>{
+  await supa.auth.signOut();
+};
+</script>
+</body>
+</html>
