@@ -253,6 +253,19 @@ $('#btn-savekey').onclick = ()=>{
 
 /* ---------- Gemini 呼び出し ---------- */
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const isNetErr = m => /load failed|failed to fetch|networkerror|network error|fetch/i.test(m||'');
+// Supabase通信を、一時的な通信エラーなら自動で数回リトライする
+async function dbRetry(fn, label){
+  let lastErr;
+  for(let a=0;a<3;a++){
+    if(a>0){ $('#btn-label').textContent='通信を再試行中…'; await sleep(800*a); }
+    const { data, error } = await fn();
+    if(!error) return data;
+    lastErr = error;
+    if(!isNetErr(error.message)) break;   // 通信以外のエラーは即やめる
+  }
+  const e = new Error((lastErr && lastErr.message) || '失敗'); e._label = label; throw e;
+}
 async function geminiCall(prompt){
   const key = localStorage.getItem('gemini_key');
   if(!key) throw new Error('NO_KEY');
@@ -317,8 +330,7 @@ $('#btn-update').onclick = async ()=>{
   hideResult();
   try{
     // 1) 既存項目を取得（AIに渡して重複防止）
-    const { data: existing, error: e2 } = await supa.from('hist_items').select('id,name,summary');
-    if(e2) throw e2;
+    const existing = await dbRetry(()=>supa.from('hist_items').select('id,name,summary'), '既存項目の取得');
     const map = new Map(existing.map(i=>[norm(i.name).toLowerCase(), i]));
 
     // 2) AIで抽出（混雑時は自動で数回リトライ）
@@ -326,10 +338,9 @@ $('#btn-update').onclick = async ()=>{
     if(!items.length){ showResult('歴史的な項目を見つけられませんでした。文章を変えて試してみてください。', true); setLoading(false); return; }
 
     // 3) AI成功後に元テキストを保存（やり直し用に丸ごと残す。失敗時は無駄な重複を残さない）
-    const { data: entry, error: e1 } = await supa
+    const entry = await dbRetry(()=>supa
       .from('hist_entries').insert({ raw_text: raw, source: null, user_id: currentUid })
-      .select().single();
-    if(e1) throw e1;
+      .select().single(), '記録の保存');
 
     // 4) 項目をupsert＋知識の層を追加
     let grew=0, born=0;
@@ -346,16 +357,15 @@ $('#btn-update').onclick = async ()=>{
       let itemId;
       if(map.has(key)){
         const ex = map.get(key);
-        await supa.from('hist_items').update({...fields, updated_at:new Date().toISOString()}).eq('id', ex.id);
+        await dbRetry(()=>supa.from('hist_items').update({...fields, updated_at:new Date().toISOString()}).eq('id', ex.id), '項目の更新');
         itemId = ex.id; grew++;
       }else{
-        const { data: ni, error:e3 } = await supa.from('hist_items').insert(fields).select().single();
-        if(e3) throw e3;
+        const ni = await dbRetry(()=>supa.from('hist_items').insert(fields).select().single(), '項目の作成');
         itemId = ni.id; born++;
         map.set(key, ni);
       }
       if(it.new_fact){
-        await supa.from('hist_facts').insert({ item_id:itemId, entry_id:entry.id, fact_text: it.new_fact, user_id: currentUid });
+        await dbRetry(()=>supa.from('hist_facts').insert({ item_id:itemId, entry_id:entry.id, fact_text: it.new_fact, user_id: currentUid }), '情報の追加');
       }
     }
 
@@ -365,7 +375,8 @@ $('#btn-update').onclick = async ()=>{
     console.error(err);
     if(err.message==='NO_KEY') showResult('Gemini APIキーが未設定です。「設定」で保存してください。', true);
     else if(/503|UNAVAILABLE|high demand|overload|429/i.test(err.message||'')) showResult('Geminiが今とても混み合っています。少し時間をおいて、もう一度「更新する」を押してください。（あなたのテキストは消えていません）', true);
-    else showResult('うまくいきませんでした：'+(err.message||err), true);
+    else if(isNetErr(err.message)) showResult('通信に失敗しました。電波の良い場所で、少し待ってからもう一度「更新する」を押してください。（テキストは消えていません）', true);
+    else showResult('うまくいきませんでした：'+(err._label?('['+err._label+'] '):'')+(err.message||err), true);
   }
   setLoading(false);
 };
