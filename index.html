@@ -110,6 +110,13 @@
   .layer .when{font-size:11px;color:var(--muted)}
   .layer .fact{font-size:15px}
   .del{margin-top:20px;width:100%;padding:12px;border:1px solid #eccabf;background:#f7e7e3;color:var(--danger);border-radius:12px;font-size:14px;font-family:inherit;cursor:pointer}
+  .edit-btn{width:100%;margin-top:10px;padding:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:12px;font-size:14px;font-family:inherit;cursor:pointer}
+  .ef{margin-bottom:12px}
+  .ef label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
+  .ef input,.ef select{width:100%;padding:11px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:var(--surface);font-family:inherit;color:var(--ink)}
+  .ef input:focus,.ef select:focus{outline:none;border-color:var(--accent)}
+  .search-box{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);margin-bottom:8px;font-family:inherit;color:var(--ink)}
+  .search-box:focus{outline:none;border-color:var(--accent)}
 
   /* settings */
   .field{margin-bottom:18px}
@@ -173,6 +180,7 @@
 
   <!-- 年表 -->
   <section id="v-timeline" class="view">
+    <input id="search" class="search-box" placeholder="🔍 名前で検索…">
     <div class="filter-row"><span class="filter-label">種類</span><div class="chips" id="type-chips"></div></div>
     <div class="filter-row"><span class="filter-label">テーマ</span><div class="chips" id="chips"></div></div>
     <div id="tl-wrap"></div>
@@ -223,6 +231,8 @@ const norm = s => (s||'').trim();
 /* ---------- タブ切替 ---------- */
 let activeFilter = 'すべて';
 let activeType = 'すべて';
+let searchQuery = '';
+$('#search').oninput = e => { searchQuery = e.target.value.trim(); renderTimeline(); };
 document.querySelectorAll('nav.tabs button').forEach(b=>{
   b.onclick = ()=>{
     document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('on'));
@@ -402,6 +412,7 @@ function renderTimeline(){
   const wrap=$('#tl-wrap');
   let list = activeFilter==='すべて'? allItems : allItems.filter(i=>i.theme===activeFilter);
   if(activeType!=='すべて') list = list.filter(i=>i.type===activeType);
+  if(searchQuery) list = list.filter(i=>(i.name||'').toLowerCase().includes(searchQuery.toLowerCase()));
   if(!list.length){ wrap.innerHTML='<div class="empty">まだ項目がありません。<br>「記録」から聴いた内容を貼って更新してみましょう。</div>'; return; }
   wrap.innerHTML = '<div class="tl">'+list.map(i=>`
     <div class="tl-item">
@@ -433,14 +444,48 @@ async function openDetail(id){
     ${item.summary?`<div class="summary">${esc(item.summary)}</div>`:''}
     <div class="layers-h">積み重なった知識</div>
     ${layers}
+    <button class="edit-btn" id="d-edit">この項目を編集</button>
     <button class="del" id="d-del">この項目を削除</button>`;
   $('#d-close').onclick=closeDetail;
+  $('#d-edit').onclick=()=>openEdit(item);
   $('#d-del').onclick=async()=>{
     if(!confirm(`「${item.name}」を削除しますか？（この項目の情報も消えます）`)) return;
     await supa.from('hist_items').delete().eq('id',id);
     closeDetail(); loadTimeline();
   };
   $('#overlay').classList.add('show');
+}
+function openEdit(item){
+  const types=['人物','出来事','テーマ','地域','その他'];
+  $('#sheet').innerHTML = `
+    <button class="close" id="e-close">×</button>
+    <h2 style="margin-bottom:14px">項目を編集</h2>
+    <div class="ef"><label>名前</label><input id="e-name" value="${esc(item.name)}"></div>
+    <div class="ef"><label>種類</label><select id="e-type">${types.map(t=>`<option ${t===(item.type||'その他')?'selected':''}>${t}</option>`).join('')}</select></div>
+    <div class="ef"><label>テーマ（例: ローマ史、戦国）</label><input id="e-theme" value="${esc(item.theme||'')}"></div>
+    <div class="ef"><label>地域（例: 日本、ローマ）</label><input id="e-region" value="${esc(item.region||'')}"></div>
+    <div class="ef"><label>年代ラベル（表示用・例: 室町時代）</label><input id="e-era" value="${esc(item.era_label||'')}"></div>
+    <div class="ef"><label>並べ替え用の年（西暦の数字・紀元前はマイナス）</label><input id="e-year" type="number" value="${item.sort_year??''}"></div>
+    <button class="primary" id="e-save" style="margin-top:8px">保存する</button>
+    <button class="edit-btn" id="e-back">もどる</button>`;
+  $('#e-close').onclick=closeDetail;
+  $('#e-back').onclick=()=>openDetail(item.id);
+  $('#e-save').onclick=async()=>{
+    const name=$('#e-name').value.trim();
+    if(!name){ alert('名前を入れてください'); return; }
+    const yv=$('#e-year').value.trim();
+    const { error } = await supa.from('hist_items').update({
+      name, type:$('#e-type').value, theme:$('#e-theme').value.trim(),
+      region:$('#e-region').value.trim(), era_label:$('#e-era').value.trim(),
+      sort_year: yv===''? null : Math.round(Number(yv)), updated_at:new Date().toISOString()
+    }).eq('id', item.id);
+    if(error){
+      if(/duplicate|23505|unique/i.test(error.message)) alert('その名前の項目は既にあります。（同じ名前への統合機能は今後の改善で対応します）');
+      else alert('保存できませんでした：'+error.message);
+      return;
+    }
+    closeDetail(); await loadTimeline();
+  };
 }
 function closeDetail(){ $('#overlay').classList.remove('show'); }
 $('#overlay').onclick=e=>{ if(e.target===$('#overlay')) closeDetail(); };
