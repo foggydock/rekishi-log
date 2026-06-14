@@ -74,16 +74,18 @@
 
   /* timeline */
   .tl{position:relative;margin-left:6px;padding-left:20px;border-left:2px solid var(--line)}
-  .tl-item{position:relative;padding:0 0 18px}
-  .tl-item::before{
-    content:"";position:absolute;left:-27px;top:5px;width:11px;height:11px;border-radius:50%;
+  .tl-group{position:relative;padding:0 0 22px}
+  .tl-group::before{
+    content:"";position:absolute;left:-27px;top:4px;width:11px;height:11px;border-radius:50%;
     background:var(--accent);border:2px solid var(--bg)
   }
-  .tl-era{font-size:12px;color:var(--muted)}
+  .tl-era{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:2px}
   .card{
     background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-    padding:12px 14px;margin-top:4px;cursor:pointer;box-shadow:var(--shadow)
+    padding:12px 14px;margin-top:8px;cursor:pointer;box-shadow:var(--shadow)
   }
+  .card.fresh{border-color:var(--new);background:var(--new-soft)}
+  .new-badge{display:inline-block;font-size:10px;margin-left:8px;padding:1px 7px;border-radius:10px;background:var(--new);color:#fff;vertical-align:2px;font-weight:500}
   .card .name{font-size:16px;font-weight:600}
   .card .meta{font-size:12px;color:var(--muted);margin-top:2px}
   .tag{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;background:var(--accent-soft);color:var(--accent);margin-right:5px}
@@ -419,19 +421,31 @@ function renderChips(){
   $('#chips').innerHTML = chips.map(c=>`<div class="chip${c===activeFilter?' on':''}" data-c="${esc(c)}">${esc(c)}</div>`).join('');
   $('#chips').querySelectorAll('.chip').forEach(ch=>ch.onclick=()=>{activeFilter=ch.dataset.c;renderChips();renderTimeline();});
 }
+const FRESH_MS = 24*60*60*1000;
+function cardHtml(i){
+  const fresh = i.updated_at && (Date.now()-new Date(i.updated_at).getTime() < FRESH_MS);
+  return `<div class="card${fresh?' fresh':''}" data-id="${i.id}">
+        <div class="name">${esc(i.name)}${fresh?'<span class="new-badge">新着</span>':''}</div>
+        <div class="meta"><span class="tag">${esc(i.type||'その他')}</span>${i.region?esc(i.region)+' ・ ':''}<span class="count">${factCounts[i.id]||0}件の情報</span></div>
+      </div>`;
+}
 function renderTimeline(){
   const wrap=$('#tl-wrap');
   let list = activeFilter==='すべて'? allItems : allItems.filter(i=>i.theme===activeFilter);
   if(activeType!=='すべて') list = list.filter(i=>i.type===activeType);
   if(searchQuery) list = list.filter(i=>(i.name||'').toLowerCase().includes(searchQuery.toLowerCase()));
   if(!list.length){ wrap.innerHTML='<div class="empty">まだ項目がありません。<br>「記録」から聴いた内容を貼って更新してみましょう。</div>'; return; }
-  wrap.innerHTML = '<div class="tl">'+list.map(i=>`
-    <div class="tl-item">
-      <div class="tl-era">${esc(i.era_label||'年代不明')}</div>
-      <div class="card" data-id="${i.id}">
-        <div class="name">${esc(i.name)}</div>
-        <div class="meta"><span class="tag">${esc(i.type||'その他')}</span>${i.region?esc(i.region)+' ・ ':''}<span class="count">${factCounts[i.id]||0}件の情報</span></div>
-      </div>
+  // 同じ時代区分（era_label）でまとめる
+  const groups=[]; const idx=new Map();
+  for(const it of list){
+    const key = it.era_label || '年代不明';
+    if(!idx.has(key)){ idx.set(key, groups.length); groups.push({era:key, items:[]}); }
+    groups[idx.get(key)].items.push(it);
+  }
+  wrap.innerHTML = '<div class="tl">'+groups.map(g=>`
+    <div class="tl-group">
+      <div class="tl-era">${esc(g.era)}</div>
+      ${g.items.map(cardHtml).join('')}
     </div>`).join('')+'</div>';
   wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
 }
