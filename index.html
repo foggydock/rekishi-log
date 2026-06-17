@@ -115,6 +115,9 @@
   .layer::before{content:"";position:absolute;left:-5px;top:6px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
   .layer .when{font-size:11px;color:var(--muted)}
   .layer .fact{font-size:15px}
+  .rel-wrap{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+  .rel-chip{padding:7px 13px;border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:18px;font-size:13px;font-family:inherit;cursor:pointer}
+  .rel-chip:active{background:var(--accent-soft)}
   .del{margin-top:20px;width:100%;padding:12px;border:1px solid #eccabf;background:#f7e7e3;color:var(--danger);border-radius:12px;font-size:14px;font-family:inherit;cursor:pointer}
   .edit-btn{width:100%;margin-top:10px;padding:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:12px;font-size:14px;font-family:inherit;cursor:pointer}
   .ef{margin-bottom:12px}
@@ -471,6 +474,20 @@ async function openDetail(id){
   const item = allItems.find(i=>String(i.id)===String(id));
   if(!item) return;
   const { data: facts } = await supa.from('hist_facts').select('*').eq('item_id',id).order('added_date',{ascending:true});
+  // 関連項目: 同じ文章(entry)から一緒に生まれた他の項目ほど関連が深い
+  let relatedHtml = '';
+  const entryIds = [...new Set((facts||[]).map(f=>f.entry_id).filter(Boolean))];
+  if(entryIds.length){
+    const { data: co } = await supa.from('hist_facts').select('item_id,entry_id').in('entry_id', entryIds);
+    const counts={}; (co||[]).forEach(r=>{ if(String(r.item_id)!==String(id)) counts[r.item_id]=(counts[r.item_id]||0)+1; });
+    const byId = new Map(allItems.map(i=>[String(i.id), i]));
+    const related = Object.keys(counts).map(k=>({id:k,n:counts[k],item:byId.get(String(k))}))
+      .filter(x=>x.item).sort((a,b)=>b.n-a.n).slice(0,8);
+    if(related.length){
+      relatedHtml = `<div class="layers-h" style="margin-top:18px">🔗 関連する項目</div>
+        <div class="rel-wrap">${related.map(r=>`<button class="rel-chip" data-rid="${r.id}">${esc(r.item.name)}</button>`).join('')}</div>`;
+    }
+  }
   const layers = (facts||[]).map(f=>`
     <div class="layer">
       <div class="when">${fmtDate(f.added_date)}に追加</div>
@@ -485,9 +502,11 @@ async function openDetail(id){
     ${item.summary?`<div class="summary">${esc(item.summary)}</div>`:''}
     <div class="layers-h">積み重なった知識</div>
     ${layers}
+    ${relatedHtml}
     <button class="edit-btn" id="d-edit">この項目を編集</button>
     <button class="del" id="d-del">この項目を削除</button>`;
   $('#d-close').onclick=closeDetail;
+  $('#sheet').querySelectorAll('.rel-chip').forEach(c=>c.onclick=()=>openDetail(c.dataset.rid));
   $('#d-edit').onclick=()=>openEdit(item);
   $('#d-del').onclick=async()=>{
     if(!confirm(`「${item.name}」を削除しますか？（この項目の情報も消えます）`)) return;
