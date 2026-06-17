@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>歴史ログ</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%237a5c3e'/><text x='50' y='55' font-size='60' text-anchor='middle' dominant-baseline='central' fill='%23f6f3ec' font-family='sans-serif'>歴</text></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%237a5c3e'/><text x='50' y='55' font-size='60' text-anchor='middle' dominant-baseline='central' fill='%23f6f3ec' font-family='sans-serif'>歴</text></svg>">
 <style>
   :root{
     --bg:#f6f3ec; --surface:#ffffff; --ink:#2c2722; --muted:#7c736a;
@@ -119,6 +121,8 @@
   .ef label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
   .ef input,.ef select{width:100%;padding:11px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:var(--surface);font-family:inherit;color:var(--ink)}
   .ef input:focus,.ef select:focus{outline:none;border-color:var(--accent)}
+  .fresh-toggle{margin-bottom:10px;padding:8px 16px;border:1px solid var(--new);background:var(--surface);color:var(--new);border-radius:20px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer}
+  .fresh-toggle.on{background:var(--new);color:#fff}
   .search-box{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);margin-bottom:8px;font-family:inherit;color:var(--ink)}
   .search-box:focus{outline:none;border-color:var(--accent)}
 
@@ -184,6 +188,7 @@
 
   <!-- 年表 -->
   <section id="v-timeline" class="view">
+    <button class="fresh-toggle" id="fresh-toggle">新着だけ</button>
     <input id="search" class="search-box" placeholder="🔍 名前で検索…">
     <div class="filter-row"><span class="filter-label">種類</span><div class="chips" id="type-chips"></div></div>
     <div class="filter-row"><span class="filter-label">テーマ</span><div class="chips" id="chips"></div></div>
@@ -236,7 +241,9 @@ const norm = s => (s||'').trim();
 let activeFilter = 'すべて';
 let activeType = 'すべて';
 let searchQuery = '';
+let freshOnly = false;
 $('#search').oninput = e => { searchQuery = e.target.value.trim(); renderTimeline(); };
+$('#fresh-toggle').onclick = () => { freshOnly = !freshOnly; $('#fresh-toggle').classList.toggle('on', freshOnly); renderTimeline(); };
 document.querySelectorAll('nav.tabs button').forEach(b=>{
   b.onclick = ()=>{
     document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('on'));
@@ -406,7 +413,11 @@ async function loadTimeline(){
   // fact数
   const { data: facts } = await supa.from('hist_facts').select('item_id');
   factCounts={}; (facts||[]).forEach(f=>factCounts[f.item_id]=(factCounts[f.item_id]||0)+1);
-  renderTypeChips(); renderChips(); renderTimeline();
+  updateFreshToggle(); renderTypeChips(); renderChips(); renderTimeline();
+}
+function updateFreshToggle(){
+  const n = allItems.filter(i=>i.updated_at && (Date.now()-new Date(i.updated_at).getTime()<FRESH_MS)).length;
+  $('#fresh-toggle').textContent = n? `新着だけ（${n}）` : '新着だけ';
 }
 function renderTypeChips(){
   const order = ['人物','出来事','テーマ','地域','その他'];
@@ -438,7 +449,8 @@ function renderTimeline(){
   let list = activeFilter==='すべて'? allItems : allItems.filter(i=>i.theme===activeFilter);
   if(activeType!=='すべて') list = list.filter(i=>i.type===activeType);
   if(searchQuery) list = list.filter(i=>(i.name||'').toLowerCase().includes(searchQuery.toLowerCase()));
-  if(!list.length){ wrap.innerHTML='<div class="empty">まだ項目がありません。<br>「記録」から聴いた内容を貼って更新してみましょう。</div>'; return; }
+  if(freshOnly) list = list.filter(i=>i.updated_at && (Date.now()-new Date(i.updated_at).getTime()<FRESH_MS));
+  if(!list.length){ wrap.innerHTML='<div class="empty">'+(freshOnly?'最近24時間の新着はありません。':'まだ項目がありません。<br>「記録」から聴いた内容を貼って更新してみましょう。')+'</div>'; return; }
   // 同じ時代区分（era_label）でまとめる
   const groups=[]; const idx=new Map();
   for(const it of list){
