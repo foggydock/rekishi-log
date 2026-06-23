@@ -260,6 +260,7 @@ document.querySelectorAll('nav.tabs button').forEach(b=>{
 
 /* ---------- 設定（Geminiキー） ---------- */
 $('#gkey').value = localStorage.getItem('gemini_key') || '';
+$('#au-email').value = localStorage.getItem('last_email') || '';
 $('#btn-savekey').onclick = ()=>{
   localStorage.setItem('gemini_key', $('#gkey').value.trim());
   const s=$('#gsaved'); s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),1800);
@@ -561,6 +562,7 @@ supa.auth.onAuthStateChange((_e, session)=>{
     currentUid = session.user.id;
     authScreen.classList.add('hide');
     $('#who').textContent = 'ログイン中：'+(session.user.email||'');
+    if(session.user.email) localStorage.setItem('last_email', session.user.email);
   }else{
     currentUid = null;
     authScreen.classList.remove('hide');
