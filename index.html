@@ -217,6 +217,10 @@
       <div class="hint">データはSupabaseに保存され、ログインすればスマホ・PCどちらからでも同じものが見られます。貼った元の文章も丸ごと保存されるので、振り分けが変でもやり直せます。</div>
     </div>
     <div class="field">
+      <div class="hint">これまでの全データをMarkdownファイルで書き出せます（バックアップ・読み返し用）。</div>
+      <button class="edit-btn" id="btn-export" style="margin-top:0">全データを書き出す</button>
+    </div>
+    <div class="field">
       <div class="hint" id="who"></div>
       <button class="btn-logout" id="btn-logout">ログアウト</button>
     </div>
@@ -612,6 +616,34 @@ $('#au-signup').onclick = async ()=>{
 };
 $('#btn-logout').onclick = async ()=>{
   await supa.auth.signOut();
+};
+
+/* ---------- バックアップ書き出し ---------- */
+function buildBackupMd(items, facts){
+  const byItem={}; (facts||[]).forEach(f=>{(byItem[f.item_id]=byItem[f.item_id]||[]).push(f);});
+  let md = `# 歴史ログ バックアップ\n\n書き出し日: ${new Date().toLocaleDateString('ja-JP')}\n全${(items||[]).length}項目\n\n`;
+  (items||[]).forEach(it=>{
+    md += `## ${it.name}\n\n`;
+    const meta=[it.type,it.era_label,it.region,it.theme].filter(Boolean).join(' / ');
+    if(meta) md += `*${meta}*\n\n`;
+    if(it.summary) md += `${it.summary}\n\n`;
+    const fs=byItem[it.id]||[];
+    if(fs.length){ md+=`### 積み重なった知識\n`; fs.forEach(f=>{ md+=`- (${fmtDate(f.added_date)}) ${f.fact_text}\n`; }); md+=`\n`; }
+  });
+  return md;
+}
+$('#btn-export').onclick = async ()=>{
+  const b=$('#btn-export'); b.disabled=true; b.textContent='書き出し中…';
+  try{
+    const { data: items } = await supa.from('hist_items').select('*').order('sort_year',{ascending:true,nullsFirst:false});
+    const { data: facts } = await supa.from('hist_facts').select('*').order('added_date',{ascending:true});
+    const md = buildBackupMd(items, facts);
+    const blob = new Blob([md],{type:'text/markdown;charset=utf-8'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download=`歴史ログ_${new Date().toISOString().slice(0,10)}.md`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }catch(e){ alert('書き出しに失敗しました：'+(e.message||e)); }
+  b.disabled=false; b.textContent='全データを書き出す';
 };
 </script>
 </body>
