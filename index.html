@@ -60,6 +60,14 @@
   .result.show{display:block}
   .result.clickable{cursor:pointer}
   .result-more{display:block;margin-top:5px;font-size:12px;opacity:.85;font-weight:500}
+  .rev-card{margin-top:24px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px;box-shadow:var(--shadow)}
+  .rev-head{font-size:12px;color:var(--muted);margin-bottom:8px}
+  .rev-name{font-size:17px;font-weight:600}
+  .rev-meta{font-size:12px;color:var(--muted);margin:3px 0 8px}
+  .rev-sum{font-size:13px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .rev-actions{display:flex;gap:8px;margin-top:13px}
+  .rev-actions button{flex:1;padding:10px;border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:10px;font-size:13px;font-family:inherit;cursor:pointer}
+  .rev-actions button.primary-act{background:var(--accent);color:#fff;border-color:var(--accent)}
   .spinner{
     width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);
     border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite
@@ -195,6 +203,7 @@
     <textarea id="raw" placeholder="ポッドキャストの文字起こしや、聴いた内容のメモを貼り付けてください…"></textarea>
     <button class="primary" id="btn-update"><span id="btn-label">更新する</span></button>
     <div class="result" id="result"></div>
+    <div id="review" style="display:none"></div>
   </section>
 
   <!-- 年表 -->
@@ -270,6 +279,7 @@ document.querySelectorAll('nav.tabs button').forEach(b=>{
     document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
     $('#v-'+v).classList.add('active');
     if(v==='timeline') loadTimeline();
+    if(v==='record') loadReview();
   };
 });
 
@@ -452,6 +462,32 @@ async function loadTimeline(){
   factCounts={}; (facts||[]).forEach(f=>factCounts[f.item_id]=(factCounts[f.item_id]||0)+1);
   updateFreshToggle(); renderTypeChips(); renderChips(); renderTimeline();
 }
+/* ---------- 今日の振り返り（ランダム復習） ---------- */
+async function loadReview(){
+  if(!allItems.length){
+    const { data } = await supa.from('hist_items').select('*');
+    allItems = data || [];
+  }
+  pickReview();
+}
+function pickReview(){
+  const wrap=$('#review');
+  if(!allItems.length){ wrap.style.display='none'; return; }
+  const i = allItems[Math.floor(Math.random()*allItems.length)];
+  const meta=[i.era_label,i.region,i.theme].filter(Boolean).join(' ・ ');
+  wrap.style.display='block';
+  wrap.innerHTML=`<div class="rev-card">
+    <div class="rev-head">📖 今日の振り返り</div>
+    <div class="rev-name">${esc(i.name)} <span class="tag ${typeClass(i.type)}">${esc(i.type||'その他')}</span></div>
+    <div class="rev-meta">${esc(meta)}</div>
+    ${i.summary?`<div class="rev-sum">${esc(i.summary)}</div>`:''}
+    <div class="rev-actions">
+      <button class="primary-act" id="rev-open">この項目を開く</button>
+      <button id="rev-next">次の項目へ →</button>
+    </div></div>`;
+  $('#rev-open').onclick=()=>openDetail(i.id);
+  $('#rev-next').onclick=pickReview;
+}
 function updateFreshToggle(){
   const n = allItems.filter(i=>i.updated_at && (Date.now()-new Date(i.updated_at).getTime()<FRESH_MS)).length;
   $('#fresh-toggle').textContent = n? `新着だけ（${n}）` : '新着だけ';
@@ -599,6 +635,7 @@ supa.auth.onAuthStateChange((_e, session)=>{
     authScreen.classList.add('hide');
     $('#who').textContent = 'ログイン中：'+(session.user.email||'');
     if(session.user.email) localStorage.setItem('last_email', session.user.email);
+    loadReview();
   }else{
     currentUid = null;
     authScreen.classList.remove('hide');
@@ -611,6 +648,7 @@ supa.auth.onAuthStateChange((_e, session)=>{
     currentUid = data.session.user.id;
     authScreen.classList.add('hide');
     $('#who').textContent = 'ログイン中：'+(data.session.user.email||'');
+    loadReview();
   }else{
     authScreen.classList.remove('hide');
   }
