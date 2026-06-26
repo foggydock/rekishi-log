@@ -58,6 +58,8 @@
   }
   .result.err{background:#f7e7e3;color:var(--danger);border-color:#eccabf}
   .result.show{display:block}
+  .result.clickable{cursor:pointer}
+  .result-more{display:block;margin-top:5px;font-size:12px;opacity:.85;font-weight:500}
   .spinner{
     width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);
     border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite
@@ -257,6 +259,7 @@ let activeFilter = 'すべて';
 let activeType = 'すべて';
 let searchQuery = '';
 let freshOnly = false;
+let lastUpdate = null;
 $('#search').oninput = e => { searchQuery = e.target.value.trim(); renderTimeline(); };
 $('#fresh-toggle').onclick = () => { freshOnly = !freshOnly; $('#fresh-toggle').classList.toggle('on', freshOnly); renderTimeline(); };
 document.querySelectorAll('nav.tabs button').forEach(b=>{
@@ -370,7 +373,7 @@ $('#btn-update').onclick = async ()=>{
       .select().single(), '記録の保存');
 
     // 4) 項目をupsert＋知識の層を追加
-    let grew=0, born=0;
+    let grewList=[], bornList=[];
     for(const it of items){
       const name = norm(it.name);
       if(!name) continue;
@@ -385,10 +388,10 @@ $('#btn-update').onclick = async ()=>{
       if(map.has(key)){
         const ex = map.get(key);
         await dbRetry(()=>supa.from('hist_items').update({...fields, updated_at:new Date().toISOString()}).eq('id', ex.id), '項目の更新');
-        itemId = ex.id; grew++;
+        itemId = ex.id; grewList.push({id:itemId, name});
       }else{
         const ni = await dbRetry(()=>supa.from('hist_items').insert(fields).select().single(), '項目の作成');
-        itemId = ni.id; born++;
+        itemId = ni.id; bornList.push({id:itemId, name});
         map.set(key, ni);
       }
       if(it.new_fact){
@@ -397,7 +400,8 @@ $('#btn-update').onclick = async ()=>{
     }
 
     $('#raw').value='';
-    showResult(`✨ ${grew}項目が育ち、${born}項目が新しく生まれました。`, false);
+    lastUpdate = { grew: grewList, born: bornList };
+    showUpdateResult(grewList.length, bornList.length);
   }catch(err){
     console.error(err);
     if(err.message==='NO_KEY') showResult('Gemini APIキーが未設定です。「設定」で保存してください。', true);
@@ -413,9 +417,26 @@ function setLoading(on){
   $('#btn-label').innerHTML = on ? '<span class="spinner"></span>' : '更新する';
 }
 function showResult(msg, isErr){
-  const r=$('#result'); r.textContent=msg; r.className='result show'+(isErr?' err':'');
+  const r=$('#result'); r.onclick=null; r.textContent=msg; r.className='result show'+(isErr?' err':'');
 }
-function hideResult(){ $('#result').className='result'; }
+function hideResult(){ const r=$('#result'); r.onclick=null; r.className='result'; }
+function showUpdateResult(g,b){
+  const r=$('#result'); r.className='result show clickable';
+  r.innerHTML=`✨ ${g}項目が育ち、${b}項目が新しく生まれました。<span class="result-more">タップで内容を見る ›</span>`;
+  r.onclick=showUpdateDetail;
+}
+function showUpdateDetail(){
+  if(!lastUpdate) return;
+  const sec=(title,arr,mark)=> arr.length? `<div class="layers-h" style="margin-top:14px">${mark} ${title}（${arr.length}）</div><div class="rel-wrap">${arr.map(x=>`<button class="rel-chip" data-rid="${x.id}">${esc(x.name)}</button>`).join('')}</div>`:'';
+  $('#sheet').innerHTML=`<button class="close" id="u-close">×</button>
+    <h2 style="margin-bottom:6px">今回の更新</h2>
+    <div class="d-meta">この更新で増えた項目です。タップで開けます。</div>
+    ${sec('新しく生まれた', lastUpdate.born, '🌱')}
+    ${sec('育った（情報が増えた）', lastUpdate.grew, '📈')}`;
+  $('#u-close').onclick=closeDetail;
+  $('#sheet').querySelectorAll('.rel-chip').forEach(c=>c.onclick=()=>openDetail(c.dataset.rid));
+  $('#overlay').classList.add('show');
+}
 
 /* ---------- 年表 ---------- */
 let allItems=[], factCounts={};
