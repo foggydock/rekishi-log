@@ -208,7 +208,10 @@
 
   <!-- 年表 -->
   <section id="v-timeline" class="view">
-    <button class="fresh-toggle" id="fresh-toggle">新着だけ</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="fresh-toggle" id="fresh-toggle">新着だけ</button>
+      <button class="fresh-toggle" id="sort-toggle">最近育った順</button>
+    </div>
     <input id="search" class="search-box" placeholder="🔍 名前で検索…">
     <div class="filter-row"><span class="filter-label">種類</span><div class="chips" id="type-chips"></div></div>
     <div class="filter-row"><span class="filter-label">テーマ</span><div class="chips" id="chips"></div></div>
@@ -268,9 +271,11 @@ let activeFilter = 'すべて';
 let activeType = 'すべて';
 let searchQuery = '';
 let freshOnly = false;
+let sortByGrown = false;
 let lastUpdate = null;
 $('#search').oninput = e => { searchQuery = e.target.value.trim(); renderTimeline(); };
 $('#fresh-toggle').onclick = () => { freshOnly = !freshOnly; $('#fresh-toggle').classList.toggle('on', freshOnly); renderTimeline(); };
+$('#sort-toggle').onclick = () => { sortByGrown = !sortByGrown; $('#sort-toggle').classList.toggle('on', sortByGrown); renderTimeline(); };
 document.querySelectorAll('nav.tabs button').forEach(b=>{
   b.onclick = ()=>{
     document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('on'));
@@ -527,6 +532,13 @@ function renderTimeline(){
   if(searchQuery) list = list.filter(i=>(i.name||'').toLowerCase().includes(searchQuery.toLowerCase()));
   if(freshOnly) list = list.filter(i=>i.updated_at && (Date.now()-new Date(i.updated_at).getTime()<FRESH_MS));
   if(!list.length){ wrap.innerHTML='<div class="empty">'+(freshOnly?'最近24時間の新着はありません。':'まだ項目がありません。<br>「記録」から聴いた内容を貼って更新してみましょう。')+'</div>'; return; }
+  if(sortByGrown){
+    // 最終更新が新しい順のフラット一覧（era区分なし）
+    list = [...list].sort((a,b)=> new Date(b.updated_at||0) - new Date(a.updated_at||0));
+    wrap.innerHTML = '<div class="tl"><div class="tl-group">'+list.map(cardHtml).join('')+'</div></div>';
+    wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
+    return;
+  }
   // 同じ時代区分（era_label）でまとめる
   const groups=[]; const idx=new Map();
   for(const it of list){
