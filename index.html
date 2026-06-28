@@ -544,7 +544,11 @@ function renderTimeline(){
 
 /* ---------- 項目詳細 ---------- */
 async function openDetail(id){
-  const item = allItems.find(i=>String(i.id)===String(id));
+  let item = allItems.find(i=>String(i.id)===String(id));
+  if(!item){                                  // キャッシュに無ければDBから直接取得（生まれたての項目対策）
+    const { data } = await supa.from('hist_items').select('*').eq('id', id).single();
+    item = data;
+  }
   if(!item) return;
   const { data: facts } = await supa.from('hist_facts').select('*').eq('item_id',id).order('added_date',{ascending:true});
   // 関連項目: 同じ文章(entry)から一緒に生まれた他の項目ほど関連が深い
