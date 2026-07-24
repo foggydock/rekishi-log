@@ -331,6 +331,25 @@ async function geminiCall(prompt){
   throw lastErr;
 }
 
+// PostgRESTはデフォルトで1回のselectが最大1000件までしか返らないため、
+// 件数がそれを超えても全件取れるようrangeでページ送りする
+async function fetchAllRows(table, columns, applyOrder){
+  const pageSize = 1000;
+  let all = [], from = 0;
+  while(true){
+    let q = supa.from(table).select(columns).range(from, from+pageSize-1);
+    q = applyOrder ? applyOrder(q) : q.order('id',{ascending:true});
+    const page = await dbRetry(()=>q, table+'の取得');
+    all = all.concat(page);
+    if(page.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+async function fetchAllItems(){
+  return fetchAllRows('hist_items', 'id,name,summary');
+}
+
 async function extractItems(rawText, existingItems){
   const existingList = existingItems.length
     ? existingItems.map(i=>`- ${i.name}${i.summary?'：'+i.summary:''}`).join('\n')
@@ -374,8 +393,8 @@ $('#btn-update').onclick = async ()=>{
   setLoading(true);
   hideResult();
   try{
-    // 1) 既存項目を取得（AIに渡して重複防止）
-    const existing = await dbRetry(()=>supa.from('hist_items').select('id,name,summary'), '既存項目の取得');
+    // 1) 既存項目を取得（AIに渡して重複防止）。1000件超もあるので全ページ取得する
+    const existing = await fetchAllItems();
     const map = new Map(existing.map(i=>[norm(i.name).toLowerCase(), i]));
 
     // 2) AIで抽出（混雑時は自動で数回リトライ）
@@ -458,20 +477,19 @@ let allItems=[], factCounts={};
 async function loadTimeline(){
   const wrap=$('#tl-wrap');
   wrap.innerHTML='<div class="empty">読み込み中…</div>';
-  const { data: items, error } = await supa.from('hist_items')
-    .select('*').order('sort_year',{ascending:true,nullsFirst:false});
-  if(error){ wrap.innerHTML='<div class="empty">読み込みに失敗しました</div>'; return; }
+  let items;
+  try{ items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false})); }
+  catch(e){ wrap.innerHTML='<div class="empty">読み込みに失敗しました</div>'; return; }
   allItems = items||[];
   // fact数
-  const { data: facts } = await supa.from('hist_facts').select('item_id');
+  const facts = await fetchAllRows('hist_facts','item_id');
   factCounts={}; (facts||[]).forEach(f=>factCounts[f.item_id]=(factCounts[f.item_id]||0)+1);
   updateFreshToggle(); renderTypeChips(); renderChips(); renderTimeline();
 }
 /* ---------- 今日の振り返り（ランダム復習） ---------- */
 async function loadReview(){
   if(!allItems.length){
-    const { data } = await supa.from('hist_items').select('*');
-    allItems = data || [];
+    allItems = await fetchAllRows('hist_items','*');
   }
   pickReview();
 }
@@ -710,8 +728,8 @@ function buildBackupMd(items, facts){
 $('#btn-export').onclick = async ()=>{
   const b=$('#btn-export'); b.disabled=true; b.textContent='書き出し中…';
   try{
-    const { data: items } = await supa.from('hist_items').select('*').order('sort_year',{ascending:true,nullsFirst:false});
-    const { data: facts } = await supa.from('hist_facts').select('*').order('added_date',{ascending:true});
+    const items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}));
+    const facts = await fetchAllRows('hist_facts','*',q=>q.order('added_date',{ascending:true}));
     const md = buildBackupMd(items, facts);
     const blob = new Blob([md],{type:'text/markdown;charset=utf-8'});
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
