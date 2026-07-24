@@ -411,16 +411,17 @@ $('#btn-update').onclick = async ()=>{
     for(const it of items){
       const name = norm(it.name);
       if(!name) continue;
+      const key = name.toLowerCase();
+      const ex = map.get(key);
       const fields = {
         type: it.type||'その他', name,
         sort_year: Number.isFinite(it.sort_year)? Math.round(it.sort_year): null,
         era_label: it.era_label||'', region: it.region||'', theme: it.theme||'',
-        summary: it.updated_summary||it.new_fact||'', user_id: currentUid
+        // AIが要約を返さなかった場合は既存の要約を消さずに残す
+        summary: it.updated_summary||it.new_fact||ex?.summary||'', user_id: currentUid
       };
-      const key = name.toLowerCase();
       let itemId;
       if(map.has(key)){
-        const ex = map.get(key);
         await dbRetry(()=>supa.from('hist_items').update({...fields, updated_at:new Date().toISOString()}).eq('id', ex.id), '項目の更新');
         itemId = ex.id; grewList.push({id:itemId, name});
       }else{
