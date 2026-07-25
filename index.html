@@ -552,7 +552,11 @@ function updateFreshToggle(){
 }
 function renderTypeChips(){
   const order = ['人物','出来事','テーマ','地域','その他'];
-  const present = order.filter(t => allItems.some(i=>i.type===t));
+  const presentSet = new Set(allItems.map(i=>i.type||'その他'));
+  const known = order.filter(t => presentSet.has(t));
+  // 「役職」「城郭」など基本5種類以外でAIが付けた種類も、実在するなら埋もれさせず出す
+  const extra = [...presentSet].filter(t => !order.includes(t)).sort((a,b)=>a.localeCompare(b,'ja'));
+  const present = [...known, ...extra];
   const chips = ['すべて', ...present];
   if(!chips.includes(activeType)) activeType='すべて';
   $('#type-chips').innerHTML = chips.map(c=>{
