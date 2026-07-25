@@ -331,11 +331,13 @@ async function dbRetry(fn, label){
   }
   const e = new Error((lastErr && lastErr.message) || '失敗'); e._label = label; throw e;
 }
-async function geminiCall(prompt){
+async function geminiCall(prompt, responseSchema){
   const key = localStorage.getItem('gemini_key');
   if(!key) throw new Error('NO_KEY');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
-  const body = JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig:{ responseMimeType:'application/json', temperature:0.2 } });
+  const gen = { responseMimeType:'application/json', temperature:0.2 };
+  if(responseSchema) gen.responseSchema = responseSchema;   // 返ってくるJSONの形を固定したいとき
+  const body = JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig: gen });
   let lastErr;
   for(let attempt=0; attempt<4; attempt++){
     if(attempt>0){ retryNote('混雑のため再試行中…'); await sleep(900*Math.pow(2,attempt-1)); }
@@ -867,30 +869,55 @@ JSONで返してください。キーは items（配列）。各要素:
 - lng: 経度（数値）。west側はマイナス。
 特定できないものは lat, lng を null にしてください。推測で0,0を返さないこと。出力はJSONのみ。`;
 }
+// 返ってくるJSONの形を固定する（キー名や型の揺れで丸ごと無駄になるのを防ぐ）
+const GEO_SCHEMA = {
+  type:'object',
+  properties:{ items:{ type:'array', items:{
+    type:'object',
+    properties:{ name:{type:'string'}, lat:{type:'number',nullable:true}, lng:{type:'number',nullable:true} },
+    required:['name']
+  } } },
+  required:['items']
+};
 async function geocodeBatch(rows){
-  const res = await geminiCall(buildGeocodePrompt(rows));
+  const res = await geminiCall(buildGeocodePrompt(rows), GEO_SCHEMA);
   const data = await res.json();
-  let txt = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  txt = txt.replace(/^```json\s*/i,'').replace(/```$/,'').trim();
-  const parsed = JSON.parse(txt);
-  return Array.isArray(parsed) ? parsed : (parsed.items || []);
+  const txt = (data?.candidates?.[0]?.content?.parts?.[0]?.text || '')
+    .replace(/^```json\s*/i,'').replace(/```$/,'').trim();
+  if(!txt){
+    // 本文が空。理由（安全フィルタ・トークン切れ等）を添えて投げる
+    const why = data?.candidates?.[0]?.finishReason || data?.promptFeedback?.blockReason || '理由不明';
+    throw new Error('AIが空の応答を返しました（'+why+'）');
+  }
+  let parsed;
+  try{ parsed = JSON.parse(txt); }
+  catch(e){ console.error('座標JSONの解析に失敗。AIの生応答:', txt); throw new Error('AIの返事がJSONとして読めませんでした'); }
+  const arr = Array.isArray(parsed) ? parsed : (parsed.items || parsed.places || parsed.results);
+  if(!Array.isArray(arr)){ console.error('想定外のJSON構造:', parsed); throw new Error('AIの返事に items 配列がありませんでした'); }
+  return arr;
 }
 $('#btn-geocode').onclick = async ()=>{
   const b=$('#btn-geocode'), st=$('#geo-status');
   if(!localStorage.getItem('gemini_key')){ st.textContent='先に上でGemini APIキーを保存してください。'; return; }
   b.disabled=true; st.textContent='対象を数えています…';
-  let done=0, failed=0;
+  let done=0, notFound=0, apiFailed=0, firstErr='';
   try{
     const items = await fetchAllRows('hist_items','id,name,type,era_label,region,lat,lng');
     const targets = (items||[]).filter(i=>i.type==='地域' && !validCoord(i.lat, i.lng));
     if(!targets.length){ st.textContent='座標が必要な「地域」の項目はありませんでした。'; b.disabled=false; return; }
-    const SIZE = 30;
+    const SIZE = 12;                                  // 1回の出力を短く保つ
     for(let s=0; s<targets.length; s+=SIZE){
       const chunk = targets.slice(s, s+SIZE);
       st.textContent = `AIに問い合わせ中… ${s}／${targets.length}件`;
-      let out=[];
+      if(s>0) await sleep(1200);                      // 連続で叩いてレート制限に当たらないように
+      let out;
       try{ out = await geocodeBatch(chunk); }
-      catch(e){ failed += chunk.length; continue; }   // 一部が失敗しても残りは続ける
+      catch(e){                                       // 失敗しても残りは続ける。ただし理由は必ず残す
+        console.error('座標の取得に失敗:', e);
+        apiFailed += chunk.length;
+        if(!firstErr) firstErr = e.message || String(e);
+        continue;
+      }
       const byName = new Map(chunk.map(r=>[norm(r.name), r]));
       for(const o of out){
         const row = byName.get(norm(o.name));
@@ -900,13 +927,21 @@ $('#btn-geocode').onclick = async ()=>{
           await dbRetry(()=>supa.from('hist_items').update({ lat:co.lat, lng:co.lng }).eq('id', row.id), '座標の保存');
           byName.delete(norm(o.name));
           done++;
-        }catch(e){ failed++; }
+        }catch(e){
+          console.error('座標の保存に失敗:', e);
+          apiFailed++;
+          if(!firstErr) firstErr = '保存できませんでした：' + (e.message||e);
+        }
       }
-      failed += byName.size;                          // AIが返さなかった/特定できなかった分
+      notFound += byName.size;                        // AIが返さなかった／場所を特定できなかった分
     }
-    st.textContent = `${done}件に座標を付けました。` + (failed? `（${failed}件は場所を特定できませんでした。項目の編集画面から手で入れられます）` : '');
+    let msg = `${done}件に座標を付けました。`;
+    if(notFound)  msg += `（${notFound}件はAIが場所を特定できませんでした。項目の編集画面から手で入れられます）`;
+    if(apiFailed) msg += `（${apiFailed}件はAIへの問い合わせ自体が失敗しました。理由：${firstErr}）`;
+    st.textContent = msg;
     allItems = [];                                    // 次に年表を開くとき読み直す
   }catch(e){
+    console.error(e);
     st.textContent = 'うまくいきませんでした：' + (e.message==='NO_KEY' ? 'Gemini APIキーが未設定です' : (e.message||e));
   }
   b.disabled=false;
