@@ -145,6 +145,15 @@
   .search-box{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);margin-bottom:8px;font-family:inherit;color:var(--ink)}
   .search-box:focus{outline:none;border-color:var(--accent)}
 
+  /* map */
+  .map-toggle{margin-bottom:10px;padding:8px 16px;border:1px solid #3B6D11;background:var(--surface);color:#3B6D11;border-radius:20px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer}
+  .map-toggle.on{background:#3B6D11;color:#fff}
+  /* 背景は海の色。世界全体を映すと地図の上下に余白が出るので、そこが白く抜けないようにする */
+  #map{height:58vh;min-height:320px;border-radius:var(--radius);border:1px solid var(--line);background:#aad3df;z-index:1}
+  .map-note{font-size:12px;color:var(--muted);margin:8px 2px 0;line-height:1.6}
+  .map-pin-label{font-size:12px;font-family:inherit}
+  .no-coord-h{font-size:13px;color:var(--muted);margin:20px 2px 6px}
+
   /* settings */
   .field{margin-bottom:18px}
   .field label{display:block;font-size:14px;font-weight:600;margin-bottom:6px}
@@ -211,6 +220,7 @@
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="fresh-toggle" id="fresh-toggle">新着だけ</button>
       <button class="fresh-toggle" id="sort-toggle">最近育った順</button>
+      <button class="map-toggle" id="map-toggle" style="display:none">🗺 地図で見る</button>
     </div>
     <input id="search" class="search-box" placeholder="🔍 名前で検索…">
     <div class="filter-row"><span class="filter-label">種類</span><div class="chips" id="type-chips"></div></div>
@@ -229,6 +239,11 @@
     <button class="primary" id="btn-savekey" style="background:var(--accent)">キーを保存</button>
     <div class="field" style="margin-top:28px">
       <div class="hint">データはSupabaseに保存され、ログインすればスマホ・PCどちらからでも同じものが見られます。貼った元の文章も丸ごと保存されるので、振り分けが変でもやり直せます。</div>
+    </div>
+    <div class="field">
+      <div class="hint">種類が「地域」の項目に、地図表示用の緯度経度をAIでまとめて付けます。まだ座標が無いものだけが対象なので、何度押しても大丈夫です（Gemini APIキーが必要）。</div>
+      <button class="edit-btn" id="btn-geocode" style="margin-top:0">地域の項目に座標をつける</button>
+      <div class="hint" id="geo-status" style="margin-top:8px"></div>
     </div>
     <div class="field">
       <div class="hint">これまでの全データをMarkdownファイルで書き出せます（バックアップ・読み返し用）。</div>
@@ -299,11 +314,16 @@ $('#btn-savekey').onclick = ()=>{
 /* ---------- Gemini 呼び出し ---------- */
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 const isNetErr = m => /load failed|failed to fetch|networkerror|network error|fetch/i.test(m||'');
+// 再試行中の案内は、今その処理を動かしている画面に出す（記録画面のボタン／設定画面の状態欄）
+function retryNote(msg){
+  if($('#v-settings').classList.contains('active')) $('#geo-status').textContent = msg;
+  else $('#btn-label').textContent = msg;
+}
 // Supabase通信を、一時的な通信エラーなら自動で数回リトライする
 async function dbRetry(fn, label){
   let lastErr;
   for(let a=0;a<3;a++){
-    if(a>0){ $('#btn-label').textContent='通信を再試行中…'; await sleep(800*a); }
+    if(a>0){ retryNote('通信を再試行中…'); await sleep(800*a); }
     const { data, error } = await fn();
     if(!error) return data;
     lastErr = error;
@@ -318,7 +338,7 @@ async function geminiCall(prompt){
   const body = JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig:{ responseMimeType:'application/json', temperature:0.2 } });
   let lastErr;
   for(let attempt=0; attempt<4; attempt++){
-    if(attempt>0){ $('#btn-label').textContent='混雑のため再試行中…'; await sleep(900*Math.pow(2,attempt-1)); }
+    if(attempt>0){ retryNote('混雑のため再試行中…'); await sleep(900*Math.pow(2,attempt-1)); }
     let res;
     try{ res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body}); }
     catch(e){ lastErr=e; continue; }
@@ -347,7 +367,15 @@ async function fetchAllRows(table, columns, applyOrder){
   return all;
 }
 async function fetchAllItems(){
-  return fetchAllRows('hist_items', 'id,name,summary');
+  return fetchAllRows('hist_items', 'id,name,summary,lat,lng');
+}
+// AIが返した緯度経度を検証する。数値でなかったり範囲外なら null（＝不明）にする
+function validCoord(lat, lng){
+  const a = Number(lat), b = Number(lng);
+  if(!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if(a < -90 || a > 90 || b < -180 || b > 180) return null;
+  if(a === 0 && b === 0) return null;              // 座標不明のとき0,0を返すAIがいるため除外
+  return { lat: Math.round(a*10000)/10000, lng: Math.round(b*10000)/10000 };
 }
 
 async function extractItems(rawText, existingItems){
@@ -370,6 +398,7 @@ ${rawText}
 - sort_year: 並べ替え用の代表年。西暦の整数。紀元前はマイナス（例 紀元前49年→-49、1560年→1560）。不明なら null。
 - era_label: 表示用の年代ラベル（例「紀元前49年」「室町時代」「1世紀頃」）。不明なら空文字。
 - region: 地域（例「ローマ」「日本」）。不明なら空文字。
+- lat / lng: typeが「地域」のときだけ、地図に置くための代表地点の緯度・経度を数値で。日本の藩は藩庁（居城）のあった場所、国・帝国・王朝は首都かおおよその中心、広い地方はその中心。「地域」以外、または特定できない場合は null。
 - theme: テーマ/ジャンル（例「ローマ史」「戦国」「科学史」）。テキスト全体の文脈から推定。
 - new_fact: 今日のテキストから分かるこの項目の事実を1〜2文で簡潔に。
 - updated_summary: この項目の要約。既存要約があれば new_fact を統合して書き直す。なければ new_fact を元に新規作成。3文以内。
@@ -413,10 +442,13 @@ $('#btn-update').onclick = async ()=>{
       if(!name) continue;
       const key = name.toLowerCase();
       const ex = map.get(key);
+      // AIが座標を返さなかった場合も、既存の座標は消さずに残す
+      const co = validCoord(it.lat, it.lng);
       const fields = {
         type: it.type||'その他', name,
         sort_year: Number.isFinite(it.sort_year)? Math.round(it.sort_year): null,
         era_label: it.era_label||'', region: it.region||'', theme: it.theme||'',
+        lat: co? co.lat : (ex?.lat ?? null), lng: co? co.lng : (ex?.lng ?? null),
         // AIが要約を返さなかった場合は既存の要約を消さずに残す
         summary: it.updated_summary||it.new_fact||ex?.summary||'', user_id: currentUid
       };
@@ -544,12 +576,20 @@ function cardHtml(i){
         <div class="meta"><span class="tag ${typeClass(i.type)}">${esc(i.type||'その他')}</span>${i.region?esc(i.region)+' ・ ':''}<span class="count">${factCounts[i.id]||0}件の情報</span></div>
       </div>`;
 }
-function renderTimeline(){
-  const wrap=$('#tl-wrap');
+function filteredItems(){
   let list = activeFilter==='すべて'? allItems : allItems.filter(i=>i.theme===activeFilter);
   if(activeType!=='すべて') list = list.filter(i=>i.type===activeType);
   if(searchQuery) list = list.filter(i=>(i.name||'').toLowerCase().includes(searchQuery.toLowerCase()));
   if(freshOnly) list = list.filter(i=>i.updated_at && (Date.now()-new Date(i.updated_at).getTime()<FRESH_MS));
+  return list;
+}
+function renderTimeline(){
+  const wrap=$('#tl-wrap');
+  destroyMap();                       // これから中身を作り直すので、前の地図は必ず片付ける
+  const list0 = filteredItems();
+  updateMapToggle();
+  if(mapMode){ renderMapView(list0); return; }
+  let list = list0;
   if(!list.length){ wrap.innerHTML='<div class="empty">'+(freshOnly?'最近24時間の新着はありません。':'まだ項目がありません。<br>「記録」から聴いた内容を貼って更新してみましょう。')+'</div>'; return; }
   if(sortByGrown){
     // 最終更新が新しい順のフラット一覧（era区分なし）
@@ -571,6 +611,91 @@ function renderTimeline(){
       ${g.items.map(cardHtml).join('')}
     </div>`).join('')+'</div>';
   wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
+}
+
+/* ---------- 地図ビュー（種類「地域」のとき） ---------- */
+let mapMode = false;
+let leafMap = null, leafLayer = null, mapGen = 0;
+function destroyMap(){
+  mapGen++;                                        // 描画中の古い処理を無効化する
+  if(leafMap){ try{ leafMap.remove(); }catch(e){} leafMap = null; leafLayer = null; }
+}
+$('#map-toggle').onclick = ()=>{
+  mapMode = !mapMode;
+  $('#map-toggle').classList.toggle('on', mapMode);
+  $('#map-toggle').textContent = mapMode ? '🗺 一覧にもどる' : '🗺 地図で見る';
+  renderTimeline();
+};
+// 地図トグルは種類「地域」を選んでいるときだけ出す
+function updateMapToggle(){
+  const show = activeType==='地域';
+  $('#map-toggle').style.display = show ? '' : 'none';
+  if(!show && mapMode){
+    mapMode = false;
+    $('#map-toggle').classList.remove('on');
+    $('#map-toggle').textContent = '🗺 地図で見る';
+  }
+}
+// Leafletは地図を開いたときだけ読み込む（普段のアプリ起動を重くしないため）
+function ensureLeaflet(){
+  if(window.L) return Promise.resolve();
+  if(window._leafletLoading) return window._leafletLoading;
+  window._leafletLoading = new Promise((resolve, reject)=>{
+    const css = document.createElement('link');
+    css.rel='stylesheet'; css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+    const js = document.createElement('script');
+    js.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.onload = ()=> window.L ? resolve() : reject(new Error('地図ライブラリを読み込めませんでした'));
+    js.onerror = ()=>{ window._leafletLoading=null; reject(new Error('地図ライブラリを読み込めませんでした')); };
+    document.head.appendChild(js);
+  });
+  return window._leafletLoading;
+}
+async function renderMapView(list){
+  const wrap = $('#tl-wrap');
+  const gen = mapGen;                              // 読み込み中に再描画が入ったら、この回は捨てる
+  const withCoord = list.filter(i=>validCoord(i.lat, i.lng));
+  const without   = list.filter(i=>!validCoord(i.lat, i.lng));
+  if(!withCoord.length){
+    wrap.innerHTML = `<div class="empty">この条件では、地図に置ける項目がまだありません。<br>
+      「設定」の「地域の項目に座標をつける」を押すと、AIが緯度経度をまとめて付けます。</div>`;
+    return;
+  }
+  wrap.innerHTML = '<div class="empty">地図を読み込み中…</div>';
+  try{ await ensureLeaflet(); }
+  catch(e){
+    if(gen !== mapGen) return;
+    wrap.innerHTML = `<div class="empty">地図を読み込めませんでした（通信環境をご確認ください）。<br>
+      <button class="edit-btn" id="map-retry" style="max-width:240px;margin:12px auto 0">もう一度読み込む</button></div>`;
+    $('#map-retry').onclick = ()=>renderTimeline();
+    return;
+  }
+  if(gen !== mapGen) return;
+  wrap.innerHTML = `<div id="map"></div>
+    <div class="map-note">📍 ${withCoord.length}件を表示中。ピンをタップすると項目が開きます。<br>
+    藩や帝国のように広がりのある場所も、代表となる一地点で表しています。</div>
+    ${without.length ? `<div class="no-coord-h">まだ地図に置けない項目（${without.length}）</div>
+      <div class="tl"><div class="tl-group">${without.map(cardHtml).join('')}</div></div>` : ''}`;
+  wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
+
+  leafMap = L.map('map', { scrollWheelZoom:false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(leafMap);
+  leafLayer = L.layerGroup().addTo(leafMap);
+  const pts = [];
+  withCoord.forEach(i=>{
+    const c = validCoord(i.lat, i.lng);
+    pts.push([c.lat, c.lng]);
+    L.circleMarker([c.lat, c.lng], {
+      radius:8, color:'#ffffff', weight:2, fillColor:typeColor('地域'), fillOpacity:.9
+    }).addTo(leafLayer)
+      .bindTooltip(i.name, { direction:'top', className:'map-pin-label' })
+      .on('click', ()=>openDetail(i.id));
+  });
+  leafMap.fitBounds(L.latLngBounds(pts), { padding:[28,28], maxZoom:9 });
+  setTimeout(()=>{ if(gen===mapGen && leafMap) leafMap.invalidateSize(); }, 60);
 }
 
 /* ---------- 項目詳細 ---------- */
@@ -634,6 +759,8 @@ function openEdit(item){
     <div class="ef"><label>地域（例: 日本、ローマ）</label><input id="e-region" value="${esc(item.region||'')}"></div>
     <div class="ef"><label>年代ラベル（表示用・例: 室町時代）</label><input id="e-era" value="${esc(item.era_label||'')}"></div>
     <div class="ef"><label>並べ替え用の年（西暦の数字・紀元前はマイナス）</label><input id="e-year" type="number" value="${item.sort_year??''}"></div>
+    <div class="ef"><label>緯度（地図用・例 35.68／空欄なら地図に出ません）</label><input id="e-lat" type="number" step="any" value="${item.lat??''}"></div>
+    <div class="ef"><label>経度（地図用・例 139.77）</label><input id="e-lng" type="number" step="any" value="${item.lng??''}"></div>
     <button class="primary" id="e-save" style="margin-top:8px">保存する</button>
     <button class="edit-btn" id="e-back">もどる</button>`;
   $('#e-close').onclick=closeDetail;
@@ -642,9 +769,14 @@ function openEdit(item){
     const name=$('#e-name').value.trim();
     if(!name){ alert('名前を入れてください'); return; }
     const yv=$('#e-year').value.trim();
+    const latv=$('#e-lat').value.trim(), lngv=$('#e-lng').value.trim();
+    if((latv==='') !== (lngv==='')){ alert('緯度と経度は両方入れるか、両方空にしてください。'); return; }
+    const co = latv===''? null : validCoord(latv, lngv);
+    if(latv!=='' && !co){ alert('緯度は-90〜90、経度は-180〜180の数字で入れてください。'); return; }
     const { error } = await supa.from('hist_items').update({
       name, type:$('#e-type').value, theme:$('#e-theme').value.trim(),
       region:$('#e-region').value.trim(), era_label:$('#e-era').value.trim(),
+      lat: co? co.lat : null, lng: co? co.lng : null,
       sort_year: yv===''? null : Math.round(Number(yv)), updated_at:new Date().toISOString()
     }).eq('id', item.id);
     if(error){
@@ -710,6 +842,74 @@ $('#au-signup').onclick = async ()=>{
 };
 $('#btn-logout').onclick = async ()=>{
   await supa.auth.signOut();
+};
+
+/* ---------- 地域項目への座標付け（既存データのまとめて処理） ---------- */
+function buildGeocodePrompt(rows){
+  const list = rows.map(r=>{
+    const hint = [r.era_label, r.region].filter(Boolean).join('・');
+    return `- ${r.name}${hint?`（${hint}）`:''}`;
+  }).join('\n');
+  return `次の歴史上の地名それぞれについて、地図に置くための代表地点の緯度・経度を答えてください。
+
+【決め方】
+- 日本の藩は、藩庁（居城）のあった場所。
+- 国・帝国・王朝は、首都か版図のおおよその中心。
+- 「東北地方」のような広い地域は、その地域のおおよその中心。
+- 城・関所・港などの具体的な場所は、その場所そのもの。
+
+【地名】
+${list}
+
+JSONで返してください。キーは items（配列）。各要素:
+- name: 入力した地名を一字一句そのまま。
+- lat: 緯度（数値）。south側はマイナス。
+- lng: 経度（数値）。west側はマイナス。
+特定できないものは lat, lng を null にしてください。推測で0,0を返さないこと。出力はJSONのみ。`;
+}
+async function geocodeBatch(rows){
+  const res = await geminiCall(buildGeocodePrompt(rows));
+  const data = await res.json();
+  let txt = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  txt = txt.replace(/^```json\s*/i,'').replace(/```$/,'').trim();
+  const parsed = JSON.parse(txt);
+  return Array.isArray(parsed) ? parsed : (parsed.items || []);
+}
+$('#btn-geocode').onclick = async ()=>{
+  const b=$('#btn-geocode'), st=$('#geo-status');
+  if(!localStorage.getItem('gemini_key')){ st.textContent='先に上でGemini APIキーを保存してください。'; return; }
+  b.disabled=true; st.textContent='対象を数えています…';
+  let done=0, failed=0;
+  try{
+    const items = await fetchAllRows('hist_items','id,name,type,era_label,region,lat,lng');
+    const targets = (items||[]).filter(i=>i.type==='地域' && !validCoord(i.lat, i.lng));
+    if(!targets.length){ st.textContent='座標が必要な「地域」の項目はありませんでした。'; b.disabled=false; return; }
+    const SIZE = 30;
+    for(let s=0; s<targets.length; s+=SIZE){
+      const chunk = targets.slice(s, s+SIZE);
+      st.textContent = `AIに問い合わせ中… ${s}／${targets.length}件`;
+      let out=[];
+      try{ out = await geocodeBatch(chunk); }
+      catch(e){ failed += chunk.length; continue; }   // 一部が失敗しても残りは続ける
+      const byName = new Map(chunk.map(r=>[norm(r.name), r]));
+      for(const o of out){
+        const row = byName.get(norm(o.name));
+        const co = row ? validCoord(o.lat, o.lng) : null;
+        if(!row || !co) continue;
+        try{
+          await dbRetry(()=>supa.from('hist_items').update({ lat:co.lat, lng:co.lng }).eq('id', row.id), '座標の保存');
+          byName.delete(norm(o.name));
+          done++;
+        }catch(e){ failed++; }
+      }
+      failed += byName.size;                          // AIが返さなかった/特定できなかった分
+    }
+    st.textContent = `${done}件に座標を付けました。` + (failed? `（${failed}件は場所を特定できませんでした。項目の編集画面から手で入れられます）` : '');
+    allItems = [];                                    // 次に年表を開くとき読み直す
+  }catch(e){
+    st.textContent = 'うまくいきませんでした：' + (e.message==='NO_KEY' ? 'Gemini APIキーが未設定です' : (e.message||e));
+  }
+  b.disabled=false;
 };
 
 /* ---------- バックアップ書き出し ---------- */
