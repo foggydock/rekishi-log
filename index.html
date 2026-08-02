@@ -219,6 +219,7 @@
     <div class="label">今日聴いたこと（文字起こしを貼り付け）</div>
     <textarea id="raw" placeholder="ポッドキャストの文字起こしや、聴いた内容のメモを貼り付けてください…"></textarea>
     <button class="primary" id="btn-update"><span id="btn-label">更新する</span></button>
+    <div class="hint" style="margin-top:6px">⌘/Ctrl + Enter でも更新できます</div>
     <div class="result" id="result"></div>
     <div id="review" style="display:none"></div>
   </section>
@@ -424,6 +425,9 @@ ${rawText}
 }
 
 /* ---------- 更新フロー ---------- */
+$('#raw').addEventListener('keydown', e=>{
+  if((e.metaKey||e.ctrlKey) && e.key==='Enter'){ e.preventDefault(); if(!$('#btn-update').disabled) $('#btn-update').onclick(); }
+});
 $('#btn-update').onclick = async ()=>{
   const raw = $('#raw').value.trim();
   if(!raw){ showResult('テキストを貼り付けてください。', true); return; }
