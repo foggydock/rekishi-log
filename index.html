@@ -154,6 +154,12 @@
   .map-pin-label{font-size:12px;font-family:inherit}
   .no-coord-h{font-size:13px;color:var(--muted);margin:20px 2px 6px}
 
+  /* PCなど横幅が広い画面では、地図を開いている時だけ横幅いっぱい＆縦も大きく使う */
+  @media (min-width:900px){
+    body.map-open .wrap{max-width:1100px}
+    #map{height:78vh}
+  }
+
   /* settings */
   .field{margin-bottom:18px}
   .field label{display:block;font-size:14px;font-weight:600;margin-bottom:6px}
@@ -194,9 +200,11 @@
   <div class="auth-card">
     <h1>歴史ログ</h1>
     <p class="auth-sub">聴いた歴史が育つ、あなただけのデータベース</p>
+    <form id="au-form">
     <input id="au-email" type="email" placeholder="メールアドレス" autocomplete="username">
     <input id="au-pass" type="password" placeholder="パスワード（6文字以上）" autocomplete="current-password">
-    <button class="primary" id="au-login" style="margin-top:4px">ログイン</button>
+    <button class="primary" id="au-login" type="submit" style="margin-top:4px">ログイン</button>
+    </form>
     <button class="auth-alt" id="au-signup">初めての方はこちら（新規登録）</button>
     <div class="auth-msg" id="au-msg"></div>
   </div>
@@ -630,6 +638,7 @@ $('#map-toggle').onclick = ()=>{
   mapMode = !mapMode;
   $('#map-toggle').classList.toggle('on', mapMode);
   $('#map-toggle').textContent = mapMode ? '🗺 一覧にもどる' : '🗺 地図で見る';
+  document.body.classList.toggle('map-open', mapMode);
   renderTimeline();
 };
 // 地図トグルは種類「地域」を選んでいるときだけ出す
@@ -640,6 +649,7 @@ function updateMapToggle(){
     mapMode = false;
     $('#map-toggle').classList.remove('on');
     $('#map-toggle').textContent = '🗺 地図で見る';
+    document.body.classList.remove('map-open');
   }
 }
 // Leafletは地図を開いたときだけ読み込む（普段のアプリ起動を重くしないため）
@@ -827,7 +837,8 @@ supa.auth.onAuthStateChange((_e, session)=>{
   }
 })();
 
-$('#au-login').onclick = async ()=>{
+$('#au-form').onsubmit = async (ev)=>{
+  ev.preventDefault();
   authMsg('');
   const email=$('#au-email').value.trim(), pass=$('#au-pass').value;
   if(!email||!pass){ authMsg('メールとパスワードを入れてください'); return; }
