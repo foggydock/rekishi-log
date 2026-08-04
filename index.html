@@ -543,7 +543,16 @@ async function loadReview(){
 function pickReview(){
   const wrap=$('#review');
   if(!allItems.length){ wrap.style.display='none'; return; }
-  const i = allItems[Math.floor(Math.random()*allItems.length)];
+  // 長く復習していない項目ほど選ばれやすくする（未復習を最優先）。
+  // 完全に古い順だと毎回同じ並びになるため、上位2割からランダムに1件選ぶ。
+  const sorted = [...allItems].sort((a,b)=>{
+    const ta = a.last_reviewed_at ? new Date(a.last_reviewed_at).getTime() : -Infinity;
+    const tb = b.last_reviewed_at ? new Date(b.last_reviewed_at).getTime() : -Infinity;
+    return ta - tb;
+  });
+  const poolSize = Math.max(1, Math.ceil(sorted.length*0.2));
+  const pool = sorted.slice(0, poolSize);
+  const i = pool[Math.floor(Math.random()*pool.length)];
   const meta=[i.era_label,i.region,i.theme].filter(Boolean).join(' ・ ');
   wrap.style.display='block';
   wrap.innerHTML=`<div class="rev-card">
@@ -555,8 +564,16 @@ function pickReview(){
       <button class="primary-act" id="rev-open">この項目を開く</button>
       <button id="rev-next">次の項目へ →</button>
     </div></div>`;
+  markReviewed(i);
   $('#rev-open').onclick=()=>openDetail(i.id);
   $('#rev-next').onclick=pickReview;
+}
+function markReviewed(i){
+  const now = new Date().toISOString();
+  i.last_reviewed_at = now;
+  supa.from('hist_items').update({last_reviewed_at:now}).eq('id', i.id).then(({error})=>{
+    if(error) console.error('last_reviewed_at更新失敗', error);
+  });
 }
 function updateFreshToggle(){
   const n = allItems.filter(i=>i.updated_at && (Date.now()-new Date(i.updated_at).getTime()<FRESH_MS)).length;
