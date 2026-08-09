@@ -424,6 +424,14 @@ ${rawText}
   return Array.isArray(parsed) ? parsed : (parsed.items || []);
 }
 
+/* ---------- 下書き自動保存（Gemini混雑等で更新に失敗しても入力が消えないように） ---------- */
+const DRAFT_KEY = 'raw_draft';
+$('#raw').value = localStorage.getItem(DRAFT_KEY) || '';
+$('#raw').addEventListener('input', ()=>{
+  const v = $('#raw').value;
+  if(v) localStorage.setItem(DRAFT_KEY, v); else localStorage.removeItem(DRAFT_KEY);
+});
+
 /* ---------- 更新フロー ---------- */
 $('#raw').addEventListener('keydown', e=>{
   if((e.metaKey||e.ctrlKey) && e.key==='Enter'){ e.preventDefault(); if(!$('#btn-update').disabled) $('#btn-update').onclick(); }
@@ -481,6 +489,7 @@ $('#btn-update').onclick = async ()=>{
     }
 
     $('#raw').value='';
+    localStorage.removeItem(DRAFT_KEY);
     lastUpdate = { grew: grewList, born: bornList };
     showUpdateResult(grewList.length, bornList.length);
   }catch(err){
