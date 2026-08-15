@@ -813,10 +813,12 @@ async function openDetail(id){
     <div class="layers-h">積み重なった知識</div>
     ${layers}
     ${relatedHtml}
+    ${(item.type==='地域' && validCoord(item.lat,item.lng)) ? '<button class="edit-btn" id="d-map">📍地図で見る</button>' : ''}
     <button class="edit-btn" id="d-edit">この項目を編集</button>
     <button class="del" id="d-del">この項目を削除</button>`;
   $('#d-close').onclick=closeDetail;
   $('#sheet').querySelectorAll('.rel-chip').forEach(c=>c.onclick=()=>openDetail(c.dataset.rid));
+  if($('#d-map')) $('#d-map').onclick=()=>{ closeDetail(); goToMapFor(item); };
   $('#d-edit').onclick=()=>openEdit(item);
   $('#d-del').onclick=async()=>{
     if(!confirm(`「${item.name}」を削除しますか？（この項目の情報も消えます）`)) return;
