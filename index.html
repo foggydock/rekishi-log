@@ -571,11 +571,27 @@ function pickReview(){
     ${i.summary?`<div class="rev-sum">${esc(i.summary)}</div>`:''}
     <div class="rev-actions">
       <button class="primary-act" id="rev-open">この項目を開く</button>
+      ${(i.type==='地域' && validCoord(i.lat,i.lng)) ? '<button id="rev-map">📍地図で見る</button>' : ''}
       <button id="rev-next">次の項目へ →</button>
     </div></div>`;
   markReviewed(i);
   $('#rev-open').onclick=()=>openDetail(i.id);
+  if($('#rev-map')) $('#rev-map').onclick=()=>goToMapFor(i);
   $('#rev-next').onclick=pickReview;
+}
+function goToMapFor(item){
+  document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('on'));
+  $('nav.tabs button[data-view="timeline"]').classList.add('on');
+  document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
+  $('#v-timeline').classList.add('active');
+  activeType = '地域';
+  activeFilter = 'すべて';
+  mapMode = true;
+  $('#map-toggle').classList.add('on');
+  $('#map-toggle').textContent = '🗺 一覧にもどる';
+  document.body.classList.add('map-open');
+  focusMapItemId = item.id;
+  loadTimeline();
 }
 function markReviewed(i){
   const now = new Date().toISOString();
@@ -660,6 +676,7 @@ function renderTimeline(){
 /* ---------- 地図ビュー（種類「地域」のとき） ---------- */
 let mapMode = false;
 let leafMap = null, leafLayer = null, mapGen = 0;
+let focusMapItemId = null;
 function destroyMap(){
   mapGen++;                                        // 描画中の古い処理を無効化する
   if(leafMap){ try{ leafMap.remove(); }catch(e){} leafMap = null; leafLayer = null; }
@@ -731,10 +748,11 @@ async function renderMapView(list){
   }).addTo(leafMap);
   leafLayer = L.layerGroup().addTo(leafMap);
   const pts = [];
+  const markerById = {};
   withCoord.forEach(i=>{
     const c = validCoord(i.lat, i.lng);
     pts.push([c.lat, c.lng]);
-    L.circleMarker([c.lat, c.lng], {
+    markerById[i.id] = L.circleMarker([c.lat, c.lng], {
       radius:8, color:'#ffffff', weight:2, fillColor:typeColor('地域'), fillOpacity:.9
     }).addTo(leafLayer)
       .bindTooltip(i.name, { direction:'top', className:'map-pin-label' })
@@ -742,6 +760,19 @@ async function renderMapView(list){
   });
   leafMap.fitBounds(L.latLngBounds(pts), { padding:[28,28], maxZoom:9 });
   setTimeout(()=>{ if(gen===mapGen && leafMap) leafMap.invalidateSize(); }, 60);
+  // 振り返りカードから特定の項目へ来たときは、その場所にズームしてピンを開く
+  const focusId = focusMapItemId;
+  focusMapItemId = null;
+  const focusTarget = focusId!=null ? withCoord.find(i=>String(i.id)===String(focusId)) : null;
+  if(focusTarget){
+    const c = validCoord(focusTarget.lat, focusTarget.lng);
+    setTimeout(()=>{
+      if(gen!==mapGen || !leafMap) return;
+      leafMap.setView([c.lat, c.lng], 8);
+      const m = markerById[focusTarget.id];
+      if(m) m.openTooltip();
+    }, 100);
+  }
 }
 
 /* ---------- 項目詳細 ---------- */
