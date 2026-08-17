@@ -136,6 +136,15 @@
   .rel-chip:active{background:var(--accent-soft)}
   .del{margin-top:20px;width:100%;padding:12px;border:1px solid #eccabf;background:#f7e7e3;color:var(--danger);border-radius:12px;font-size:14px;font-family:inherit;cursor:pointer}
   .edit-btn{width:100%;margin-top:10px;padding:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:12px;font-size:14px;font-family:inherit;cursor:pointer}
+  .dupe-group{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:12px}
+  .dupe-group .dg-title{font-weight:700;margin-bottom:8px}
+  .dupe-row{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
+  .dupe-row:first-of-type{border-top:none}
+  .dupe-row input[type=radio]{margin-top:4px}
+  .dupe-row .dr-meta{font-size:12px;color:var(--muted)}
+  .dupe-row .dr-summary{font-size:13px;color:var(--muted);margin-top:2px}
+  .dupe-merge-btn{width:100%;margin-top:10px;padding:10px;border:none;background:var(--accent);color:#fff;border-radius:10px;font-size:14px;font-family:inherit;cursor:pointer}
+  .dupe-merge-btn:disabled{opacity:.5}
   .ef{margin-bottom:12px}
   .ef label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
   .ef input,.ef select{width:100%;padding:11px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:var(--surface);font-family:inherit;color:var(--ink)}
@@ -257,6 +266,12 @@
     <div class="field">
       <div class="hint">これまでの全データをMarkdownファイルで書き出せます（バックアップ・読み返し用）。</div>
       <button class="edit-btn" id="btn-export" style="margin-top:0">全データを書き出す</button>
+    </div>
+    <div class="field">
+      <div class="hint">同じ名前の項目が複数できてしまった場合に見つけて1つにまとめられます（積み重なった知識は残したまま統合します）。</div>
+      <button class="edit-btn" id="btn-dupes" style="margin-top:0">重複しそうな項目をさがす</button>
+      <div class="hint" id="dupe-status" style="margin-top:8px"></div>
+      <div id="dupe-list"></div>
     </div>
     <div class="field">
       <div class="hint" id="who"></div>
@@ -1024,6 +1039,69 @@ $('#btn-geocode').onclick = async ()=>{
   }
   b.disabled=false;
 };
+
+/* ---------- 重複項目の統合 ---------- */
+$('#btn-dupes').onclick = async ()=>{
+  const b=$('#btn-dupes'), st=$('#dupe-status'), list=$('#dupe-list');
+  b.disabled=true; st.textContent='さがしています…'; list.innerHTML='';
+  try{
+    const items = await fetchAllRows('hist_items','id,name,type,summary,region,era_label,theme,lat,lng,created_at');
+    const groups = new Map();
+    (items||[]).forEach(it=>{
+      const key = norm(it.name).toLowerCase();
+      if(!key) return;
+      if(!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(it);
+    });
+    const dupeGroups = [...groups.values()].filter(g=>g.length>1)
+      .sort((a,b)=>a[0].name.localeCompare(b[0].name,'ja'));
+    if(!dupeGroups.length){ st.textContent='同じ名前の項目は見つかりませんでした。'; b.disabled=false; return; }
+    st.textContent = `同じ名前の項目が${dupeGroups.length}組見つかりました。残す方を選んで「まとめる」を押してください。`;
+    list.innerHTML = dupeGroups.map((g,gi)=>`
+      <div class="dupe-group" data-gi="${gi}">
+        <div class="dg-title">${esc(g[0].name)}（${g.length}件）</div>
+        ${g.map((it,ii)=>`
+          <label class="dupe-row">
+            <input type="radio" name="dg-${gi}" value="${ii}" ${ii===0?'checked':''}>
+            <div>
+              <div class="dr-meta">${esc([it.type,it.era_label,it.region].filter(Boolean).join(' ・ ')||'（分類なし）')}</div>
+              <div class="dr-summary">${esc((it.summary||'').slice(0,60))}${(it.summary||'').length>60?'…':''}</div>
+            </div>
+          </label>`).join('')}
+        <button class="dupe-merge-btn" data-gi="${gi}">この項目にまとめる</button>
+      </div>`).join('');
+    list.querySelectorAll('.dupe-merge-btn').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const gi = Number(btn.dataset.gi);
+        const group = dupeGroups[gi];
+        const sel = list.querySelector(`input[name="dg-${gi}"]:checked`);
+        const keepIdx = Number(sel.value);
+        const keep = group[keepIdx];
+        const others = group.filter((_,i)=>i!==keepIdx);
+        btn.disabled = true; btn.textContent = 'まとめています…';
+        try{ await mergeDuplicateItems(keep, others); }
+        catch(e){ console.error(e); alert('まとめられませんでした：'+(e.message||e)); btn.disabled=false; btn.textContent='この項目にまとめる'; return; }
+        list.querySelector(`.dupe-group[data-gi="${gi}"]`).remove();
+        allItems = [];  // 次に年表を開くとき読み直す
+      };
+    });
+  }catch(e){
+    console.error(e);
+    st.textContent = 'うまくいきませんでした：' + (e.message||e);
+  }
+  b.disabled=false;
+};
+async function mergeDuplicateItems(keep, others){
+  const otherIds = others.map(o=>o.id);
+  // 積み重なった知識（hist_facts）は消さずに残す項目へ付け替える
+  await dbRetry(()=>supa.from('hist_facts').update({ item_id: keep.id }).in('item_id', otherIds), '情報の付け替え');
+  // 残す項目に無い情報（要約・座標）は、統合される項目から補う
+  const patch = {};
+  if(!keep.summary){ const s = others.find(o=>o.summary); if(s) patch.summary = s.summary; }
+  if(!validCoord(keep.lat,keep.lng)){ const c = others.find(o=>validCoord(o.lat,o.lng)); if(c){ patch.lat=c.lat; patch.lng=c.lng; } }
+  if(Object.keys(patch).length){ await dbRetry(()=>supa.from('hist_items').update(patch).eq('id', keep.id), '項目の補完'); }
+  await dbRetry(()=>supa.from('hist_items').delete().in('id', otherIds), '重複項目の削除');
+}
 
 /* ---------- バックアップ書き出し ---------- */
 function buildBackupMd(items, facts){
