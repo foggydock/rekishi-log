@@ -228,7 +228,7 @@
     <div class="label">今日聴いたこと（文字起こしを貼り付け）</div>
     <textarea id="raw" placeholder="ポッドキャストの文字起こしや、聴いた内容のメモを貼り付けてください…"></textarea>
     <button class="primary" id="btn-update"><span id="btn-label">更新する</span></button>
-    <div class="hint" style="margin-top:6px">⌘/Ctrl + Enter でも更新できます</div>
+    <div class="hint" style="margin-top:6px">⌘/Ctrl + Enter でも更新できます　<a href="#" id="btn-clear-draft" style="color:inherit;text-decoration:underline">クリア</a></div>
     <div class="result" id="result"></div>
     <div id="review" style="display:none"></div>
   </section>
@@ -446,6 +446,12 @@ $('#raw').addEventListener('input', ()=>{
   const v = $('#raw').value;
   if(v) localStorage.setItem(DRAFT_KEY, v); else localStorage.removeItem(DRAFT_KEY);
 });
+$('#btn-clear-draft').onclick = (e)=>{
+  e.preventDefault();
+  $('#raw').value='';
+  localStorage.removeItem(DRAFT_KEY);
+  hideResult();
+};
 
 /* ---------- 更新フロー ---------- */
 $('#raw').addEventListener('keydown', e=>{
