@@ -842,7 +842,8 @@ async function openDetail(id){
   if($('#d-map')) $('#d-map').onclick=()=>{ closeDetail(); goToMapFor(item); };
   $('#d-edit').onclick=()=>openEdit(item);
   $('#d-del').onclick=async()=>{
-    if(!confirm(`「${item.name}」を削除しますか？（この項目の情報も消えます）`)) return;
+    if(!confirm(`「${item.name}」を削除しますか？（この項目の情報も消えます。削除前に内容をファイルに保存します）`)) return;
+    downloadBackupMd([item], facts||[], `削除_${item.name}`);
     await supa.from('hist_items').delete().eq('id',id);
     closeDetail(); loadTimeline();
   };
@@ -1085,7 +1086,11 @@ $('#btn-dupes').onclick = async ()=>{
         const keep = group[keepIdx];
         const others = group.filter((_,i)=>i!==keepIdx);
         btn.disabled = true; btn.textContent = 'まとめています…';
-        try{ await mergeDuplicateItems(keep, others); }
+        try{
+          const otherFacts = await fetchAllRows('hist_facts','*',q=>q.in('item_id', others.map(o=>o.id)).order('added_date',{ascending:true}));
+          downloadBackupMd(others, otherFacts, `統合_${keep.name}`);
+          await mergeDuplicateItems(keep, others);
+        }
         catch(e){ console.error(e); alert('まとめられませんでした：'+(e.message||e)); btn.disabled=false; btn.textContent='この項目にまとめる'; return; }
         list.querySelector(`.dupe-group[data-gi="${gi}"]`).remove();
         allItems = [];  // 次に年表を開くとき読み直す
@@ -1123,16 +1128,20 @@ function buildBackupMd(items, facts){
   });
   return md;
 }
+// 削除・統合のように取り消せない操作の直前に、消える内容をファイルとして残す
+function downloadBackupMd(items, facts, filenameStub){
+  const md = buildBackupMd(items, facts);
+  const blob = new Blob([md],{type:'text/markdown;charset=utf-8'});
+  const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download=`歴史ログ_${filenameStub}_${new Date().toISOString().slice(0,10)}.md`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
 $('#btn-export').onclick = async ()=>{
   const b=$('#btn-export'); b.disabled=true; b.textContent='書き出し中…';
   try{
     const items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}));
     const facts = await fetchAllRows('hist_facts','*',q=>q.order('added_date',{ascending:true}));
-    const md = buildBackupMd(items, facts);
-    const blob = new Blob([md],{type:'text/markdown;charset=utf-8'});
-    const url=URL.createObjectURL(blob); const a=document.createElement('a');
-    a.href=url; a.download=`歴史ログ_${new Date().toISOString().slice(0,10)}.md`;
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    downloadBackupMd(items, facts, '全データ');
   }catch(e){ alert('書き出しに失敗しました：'+(e.message||e)); }
   b.disabled=false; b.textContent='全データを書き出す';
 };
