@@ -282,7 +282,7 @@
 </div>
 
 <nav class="tabs">
-  <button data-view="record" class="on"><span class="ic">✎</span>記録</button>
+  <button data-view="record" class="on"><span class="ic" style="position:relative">✎<span id="draft-dot" style="display:none;position:absolute;top:-2px;right:-6px;width:8px;height:8px;border-radius:50%;background:var(--new)"></span></span>記録</button>
   <button data-view="timeline"><span class="ic">≡</span>年表</button>
   <button data-view="settings"><span class="ic">⚙</span>設定</button>
 </nav>
@@ -442,14 +442,21 @@ ${rawText}
 /* ---------- 下書き自動保存（Gemini混雑等で更新に失敗しても入力が消えないように） ---------- */
 const DRAFT_KEY = 'raw_draft';
 $('#raw').value = localStorage.getItem(DRAFT_KEY) || '';
+// 記録タブ以外にいる間も、下書きが残っていることに気づけるようタブにバッジを出す
+function updateDraftBadge(){
+  $('#draft-dot').style.display = localStorage.getItem(DRAFT_KEY) ? 'block' : 'none';
+}
+updateDraftBadge();
 $('#raw').addEventListener('input', ()=>{
   const v = $('#raw').value;
   if(v) localStorage.setItem(DRAFT_KEY, v); else localStorage.removeItem(DRAFT_KEY);
+  updateDraftBadge();
 });
 $('#btn-clear-draft').onclick = (e)=>{
   e.preventDefault();
   $('#raw').value='';
   localStorage.removeItem(DRAFT_KEY);
+  updateDraftBadge();
   hideResult();
 };
 $('#btn-copy-draft').onclick = async (e)=>{
@@ -525,6 +532,7 @@ $('#btn-update').onclick = async ()=>{
 
     $('#raw').value='';
     localStorage.removeItem(DRAFT_KEY);
+    updateDraftBadge();
     lastUpdate = { grew: grewList, born: bornList };
     showUpdateResult(grewList.length, bornList.length);
   }catch(err){
