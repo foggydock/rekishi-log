@@ -228,7 +228,7 @@
     <div class="label">今日聴いたこと（文字起こしを貼り付け）</div>
     <textarea id="raw" placeholder="ポッドキャストの文字起こしや、聴いた内容のメモを貼り付けてください…"></textarea>
     <button class="primary" id="btn-update"><span id="btn-label">更新する</span></button>
-    <div class="hint" style="margin-top:6px">⌘/Ctrl + Enter でも更新できます　<a href="#" id="btn-clear-draft" style="color:inherit;text-decoration:underline">クリア</a></div>
+    <div class="hint" style="margin-top:6px">⌘/Ctrl + Enter でも更新できます　<a href="#" id="btn-copy-draft" style="color:inherit;text-decoration:underline">コピー</a>　<a href="#" id="btn-clear-draft" style="color:inherit;text-decoration:underline">クリア</a></div>
     <div class="result" id="result"></div>
     <div id="review" style="display:none"></div>
   </section>
@@ -451,6 +451,20 @@ $('#btn-clear-draft').onclick = (e)=>{
   $('#raw').value='';
   localStorage.removeItem(DRAFT_KEY);
   hideResult();
+};
+$('#btn-copy-draft').onclick = async (e)=>{
+  e.preventDefault();
+  const v = $('#raw').value;
+  if(!v) return;
+  const el = $('#btn-copy-draft');
+  const orig = el.textContent;
+  try{
+    await navigator.clipboard.writeText(v);
+    el.textContent = 'コピーしました';
+  }catch(err){
+    el.textContent = 'コピー失敗';
+  }
+  setTimeout(()=>{ el.textContent = orig; }, 1500);
 };
 
 /* ---------- 更新フロー ---------- */
