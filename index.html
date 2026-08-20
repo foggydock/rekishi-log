@@ -250,7 +250,7 @@
   <section id="v-settings" class="view">
     <div class="field">
       <label>Gemini APIキー</label>
-      <div class="hint">この端末だけに保存されます（公開されません）。家計簿アプリと同じキーでOK。</div>
+      <div class="hint">アカウントに保存され、ログインしていればスマホ・PCどちらでも使えます（公開されません）。家計簿アプリと同じキーでOK。</div>
       <input id="gkey" type="password" placeholder="AIza... で始まるキー">
       <div class="saved" id="gsaved">保存しました</div>
     </div>
@@ -328,11 +328,28 @@ document.querySelectorAll('nav.tabs button').forEach(b=>{
 });
 
 /* ---------- 設定（Geminiキー） ---------- */
+// 端末のlocalStorageはオフライン時などのキャッシュとして使い、正はSupabase(hist_settings)に置く。
+// こうすることでPC・スマホどちらでキーを保存しても、もう一方の端末で再入力しなくてよくなる。
 $('#gkey').value = localStorage.getItem('gemini_key') || '';
 $('#au-email').value = localStorage.getItem('last_email') || '';
-$('#btn-savekey').onclick = ()=>{
-  localStorage.setItem('gemini_key', $('#gkey').value.trim());
+function getGeminiKey(){ return localStorage.getItem('gemini_key') || ''; }
+async function loadGeminiKeyFromCloud(){
+  try{
+    const { data } = await supa.from('hist_settings').select('gemini_key').eq('user_id', currentUid).maybeSingle();
+    if(data && data.gemini_key){
+      localStorage.setItem('gemini_key', data.gemini_key);
+      $('#gkey').value = data.gemini_key;
+    }
+  }catch(e){ console.error('Geminiキーの取得に失敗', e); }
+}
+$('#btn-savekey').onclick = async ()=>{
+  const key = $('#gkey').value.trim();
+  localStorage.setItem('gemini_key', key);
   const s=$('#gsaved'); s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),1800);
+  if(currentUid){
+    try{ await supa.from('hist_settings').upsert({ user_id: currentUid, gemini_key: key }); }
+    catch(e){ console.error('Geminiキーの保存に失敗（この端末には保存済み）', e); }
+  }
 };
 
 /* ---------- Gemini 呼び出し ---------- */
@@ -356,7 +373,7 @@ async function dbRetry(fn, label){
   const e = new Error((lastErr && lastErr.message) || '失敗'); e._label = label; throw e;
 }
 async function geminiCall(prompt, responseSchema){
-  const key = localStorage.getItem('gemini_key');
+  const key = getGeminiKey();
   if(!key) throw new Error('NO_KEY');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
   const gen = { responseMimeType:'application/json', temperature:0.2 };
@@ -490,7 +507,7 @@ $('#raw').addEventListener('keydown', e=>{
 $('#btn-update').onclick = async ()=>{
   const raw = $('#raw').value.trim();
   if(!raw){ showResult('テキストを貼り付けてください。', true); return; }
-  if(!localStorage.getItem('gemini_key')){ showResult('先に「設定」でGemini APIキーを保存してください。', true); return; }
+  if(!getGeminiKey()){ showResult('先に「設定」でGemini APIキーを保存してください。', true); return; }
 
   setLoading(true);
   hideResult();
@@ -934,6 +951,7 @@ supa.auth.onAuthStateChange((_e, session)=>{
     authScreen.classList.add('hide');
     $('#who').textContent = 'ログイン中：'+(session.user.email||'');
     if(session.user.email) localStorage.setItem('last_email', session.user.email);
+    loadGeminiKeyFromCloud();
     loadReview();
   }else{
     currentUid = null;
@@ -947,6 +965,7 @@ supa.auth.onAuthStateChange((_e, session)=>{
     currentUid = data.session.user.id;
     authScreen.classList.add('hide');
     $('#who').textContent = 'ログイン中：'+(data.session.user.email||'');
+    loadGeminiKeyFromCloud();
     loadReview();
   }else{
     authScreen.classList.remove('hide');
@@ -1029,7 +1048,7 @@ async function geocodeBatch(rows){
 }
 $('#btn-geocode').onclick = async ()=>{
   const b=$('#btn-geocode'), st=$('#geo-status');
-  if(!localStorage.getItem('gemini_key')){ st.textContent='先に上でGemini APIキーを保存してください。'; return; }
+  if(!getGeminiKey()){ st.textContent='先に上でGemini APIキーを保存してください。'; return; }
   b.disabled=true; st.textContent='対象を数えています…';
   let done=0, notFound=0, apiFailed=0, firstErr='';
   try{
