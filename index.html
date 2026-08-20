@@ -461,17 +461,26 @@ $('#btn-clear-draft').onclick = (e)=>{
 };
 $('#btn-copy-draft').onclick = async (e)=>{
   e.preventDefault();
-  const v = $('#raw').value;
+  const raw = $('#raw');
+  const v = raw.value;
   if(!v) return;
   const el = $('#btn-copy-draft');
   const orig = el.textContent;
+  let ok = false;
   try{
     await navigator.clipboard.writeText(v);
-    el.textContent = 'コピーしました';
+    ok = true;
   }catch(err){
-    el.textContent = 'コピー失敗';
+    // iOS Safariではclipboard APIが使えない/失敗することがあるため、
+    // テキストエリアを選択してexecCommand('copy')にフォールバックする
+    try{
+      raw.focus();
+      raw.setSelectionRange(0, v.length);
+      ok = document.execCommand('copy');
+    }catch(err2){ ok = false; }
   }
-  setTimeout(()=>{ el.textContent = orig; }, 1500);
+  el.textContent = ok ? 'コピーしました' : 'コピー失敗（テキストを長押しして手動でコピーしてください）';
+  setTimeout(()=>{ el.textContent = orig; }, ok ? 1500 : 4000);
 };
 
 /* ---------- 更新フロー ---------- */
