@@ -40,12 +40,8 @@
     background:var(--surface);resize:vertical;color:var(--ink)
   }
   textarea:focus,input:focus{outline:none;border-color:var(--accent)}
-  .row{display:flex;gap:8px;align-items:center;margin-top:10px}
-  input.src{
-    flex:1;padding:11px 12px;border:1px solid var(--line);border-radius:10px;
-    font-size:15px;background:var(--surface);font-family:inherit;color:var(--ink)
-  }
   .label{font-size:13px;color:var(--muted);margin:4px 2px}
+  .hint{font-size:12px;color:var(--muted);margin-bottom:8px}
   button.primary{
     width:100%;margin-top:12px;padding:15px;border:none;border-radius:var(--radius);
     background:var(--accent);color:#fff;font-size:17px;font-weight:600;
@@ -172,7 +168,6 @@
   /* settings */
   .field{margin-bottom:18px}
   .field label{display:block;font-size:14px;font-weight:600;margin-bottom:6px}
-  .field .hint{font-size:12px;color:var(--muted);margin-bottom:8px}
   .field input{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);font-family:inherit;color:var(--ink)}
   .saved{font-size:13px;color:var(--new);margin-top:6px;display:none}
   .saved.show{display:inline}
@@ -254,7 +249,7 @@
       <input id="gkey" type="password" placeholder="AIza... で始まるキー">
       <div class="saved" id="gsaved">保存しました</div>
     </div>
-    <button class="primary" id="btn-savekey" style="background:var(--accent)">キーを保存</button>
+    <button class="primary" id="btn-savekey">キーを保存</button>
     <div class="field" style="margin-top:28px">
       <div class="hint">データはSupabaseに保存され、ログインすればスマホ・PCどちらからでも同じものが見られます。貼った元の文章も丸ごと保存されるので、振り分けが変でもやり直せます。</div>
     </div>
@@ -304,8 +299,10 @@ const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const GEMINI_MODEL = 'gemini-2.5-flash';
 
 const $ = s => document.querySelector(s);
-const esc = s => (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const norm = s => (s||'').trim();
+const FRESH_MS = 24*60*60*1000;
+const isFresh = i => !!(i.updated_at && (Date.now()-new Date(i.updated_at).getTime() < FRESH_MS));
 function typeClass(t){ return ({'人物':'ty-person','出来事':'ty-event','地域':'ty-place','テーマ':'ty-theme'})[t] || 'ty-other'; }
 function typeColor(t){ return ({'人物':'#378ADD','出来事':'#D85A30','地域':'#639922','テーマ':'#7F77DD'})[t] || '#888780'; }
 
@@ -316,7 +313,13 @@ let searchQuery = '';
 let freshOnly = false;
 let sortByGrown = false;
 let lastUpdate = null;
-$('#search').oninput = e => { searchQuery = e.target.value.trim(); renderTimeline(); };
+let searchDebounce = null;
+$('#search').oninput = e => {
+  // 地図表示中は入力のたびにLeaflet地図が破棄・再構築されて重いため、入力が止まってから描画する
+  const v = e.target.value;
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(()=>{ searchQuery = v.trim(); renderTimeline(); }, mapMode ? 350 : 0);
+};
 $('#fresh-toggle').onclick = () => { freshOnly = !freshOnly; $('#fresh-toggle').classList.toggle('on', freshOnly); renderTimeline(); };
 $('#sort-toggle').onclick = () => { sortByGrown = !sortByGrown; $('#sort-toggle').classList.toggle('on', sortByGrown); renderTimeline(); };
 document.querySelectorAll('nav.tabs button').forEach(b=>{
@@ -378,10 +381,13 @@ async function loadFallbackStatus(){
 
 /* ---------- Gemini 呼び出し ---------- */
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
-const isNetErr = m => /load failed|failed to fetch|networkerror|network error|fetch/i.test(m||'');
+const isNetErr = m => /load failed|failed to fetch|networkerror|network error|typeerror.*fetch/i.test(m||'');
 // 再試行中の案内は、今その処理を動かしている画面に出す（記録画面のボタン／設定画面の状態欄）
+// どの処理が今動いているかで、再試行メッセージの出し先を切り替える（設定画面には状態欄が複数あるため）
+let activeStatusSel = null;
 function retryNote(msg){
-  if($('#v-settings').classList.contains('active')) $('#geo-status').textContent = msg;
+  if(activeStatusSel) $(activeStatusSel).textContent = msg;
+  else if($('#v-settings').classList.contains('active')) $('#geo-status').textContent = msg;
   else $('#btn-label').textContent = msg;
 }
 // Supabase通信を、一時的な通信エラーなら自動で数回リトライする
@@ -395,6 +401,22 @@ async function dbRetry(fn, label){
     if(!isNetErr(error.message)) break;   // 通信以外のエラーは即やめる
   }
   const e = new Error((lastErr && lastErr.message) || '失敗'); e._label = label; throw e;
+}
+// Geminiのレスポンスから items 配列を取り出す（extractItems・geocodeBatch共通）
+function parseGeminiItems(data){
+  const txt = (data?.candidates?.[0]?.content?.parts?.[0]?.text || '')
+    .replace(/^```json\s*/i,'').replace(/```$/,'').trim();
+  if(!txt){
+    // 本文が空。理由（安全フィルタ・トークン切れ等）を添えて投げる
+    const why = data?.candidates?.[0]?.finishReason || data?.promptFeedback?.blockReason || '理由不明';
+    throw new Error('AIが空の応答を返しました（'+why+'）');
+  }
+  let parsed;
+  try{ parsed = JSON.parse(txt); }
+  catch(e){ console.error('JSONの解析に失敗。AIの生応答:', txt); throw new Error('AIの返事がJSONとして読めませんでした'); }
+  const arr = Array.isArray(parsed) ? parsed : (parsed.items || parsed.places || parsed.results);
+  if(!Array.isArray(arr)){ console.error('想定外のJSON構造:', parsed); throw new Error('AIの返事に items 配列がありませんでした'); }
+  return arr;
 }
 async function geminiCall(prompt, responseSchema){
   const key = getGeminiKey();
@@ -434,7 +456,8 @@ async function fetchAllRows(table, columns, applyOrder){
   return all;
 }
 async function fetchAllItems(){
-  return fetchAllRows('hist_items', 'id,name,summary,lat,lng');
+  // 更新時に既存値を守れるよう、上書き対象になりうる列は全部取得しておく
+  return fetchAllRows('hist_items', 'id,name,summary,lat,lng,type,sort_year,era_label,region,theme');
 }
 // AIが返した緯度経度を検証する。数値でなかったり範囲外なら null（＝不明）にする
 function validCoord(lat, lng){
@@ -445,9 +468,27 @@ function validCoord(lat, lng){
   return { lat: Math.round(a*10000)/10000, lng: Math.round(b*10000)/10000 };
 }
 
+// 返ってくるJSONの形を固定する（キー名や型の揺れで丸ごと無駄になるのを防ぐ。sort_yearが文字列で返ると
+// 数値判定に失敗して年代情報が丸ごと欠落するため、ここで型を強制する）
+const EXTRACT_SCHEMA = {
+  type:'object',
+  properties:{ items:{ type:'array', items:{
+    type:'object',
+    properties:{
+      name:{type:'string'}, type:{type:'string'},
+      sort_year:{type:'number',nullable:true}, era_label:{type:'string'}, region:{type:'string'},
+      lat:{type:'number',nullable:true}, lng:{type:'number',nullable:true},
+      theme:{type:'string'}, new_fact:{type:'string'}, updated_summary:{type:'string'}
+    },
+    required:['name','type']
+  } } },
+  required:['items']
+};
 async function extractItems(rawText, existingItems){
+  // 既存項目リストは名前だけに絞る（要約まで含めるとプロジェクトが育つほどプロンプトが肥大化し、
+  // Gemini混雑時の失敗率が上がる原因になっていた）
   const existingList = existingItems.length
-    ? existingItems.map(i=>`- ${i.name}${i.summary?'：'+i.summary:''}`).join('\n')
+    ? existingItems.map(i=>`- ${i.name}`).join('\n')
     : '（まだありません）';
   const prompt = `あなたは歴史データベースの整理係です。下の「今日のテキスト」から、歴史上の項目（人物・出来事・テーマ・地域・その他）を抽出してください。
 
@@ -472,12 +513,8 @@ ${rawText}
 
 注意: 実質的な歴史的内容が無いものは項目にしない。出力はJSONのみ。`;
 
-  const res = await geminiCall(prompt);
-  const data = await res.json();
-  let txt = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  txt = txt.replace(/^```json\s*/i,'').replace(/```$/,'').trim();
-  const parsed = JSON.parse(txt);
-  return Array.isArray(parsed) ? parsed : (parsed.items || []);
+  const res = await geminiCall(prompt, EXTRACT_SCHEMA);
+  return parseGeminiItems(await res.json());
 }
 
 /* ---------- 下書き自動保存（Gemini混雑等で更新に失敗しても入力が消えないように） ---------- */
@@ -536,7 +573,18 @@ $('#btn-update').onclick = async ()=>{
   setLoading(true);
   hideResult();
   try{
-    // 1) 既存項目を取得（AIに渡して重複防止）。1000件超もあるので全ページ取得する
+    // 0) 同じ本文がすでに保存済みなら確認する。Gemini混雑等の失敗後に「更新する」を
+    //    押し直すと、以前は同じ記録・同じ情報がそのまま重複して積み上がっていたため
+    const dupEntry = await dbRetry(()=>supa.from('hist_entries').select('id,created_at')
+      .eq('user_id', currentUid).eq('raw_text', raw).order('created_at',{ascending:false}).limit(1).maybeSingle(), '記録の重複確認');
+    if(dupEntry){
+      const d = new Date(dupEntry.created_at);
+      const when = `${d.getMonth()+1}月${d.getDate()}日 ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`;
+      const proceed = confirm(`同じ内容が${when}にすでに記録されています。もう一度追加しますか？\n（誤って何度も「更新する」を押しただけなら「キャンセル」を選んでください）`);
+      if(!proceed){ setLoading(false); return; }
+    }
+
+    // 1) 既存項目を取得（AIに渡して重複防止・既存値の保持に使う）。1000件超もあるので全ページ取得する
     const existing = await fetchAllItems();
     const map = new Map(existing.map(i=>[norm(i.name).toLowerCase(), i]));
 
@@ -549,34 +597,46 @@ $('#btn-update').onclick = async ()=>{
       .from('hist_entries').insert({ raw_text: raw, source: null, user_id: currentUid })
       .select().single(), '記録の保存');
 
-    // 4) 項目をupsert＋知識の層を追加
-    let grewList=[], bornList=[];
+    // 4) 項目をupsert＋知識の層を追加。1件失敗しても他の項目は続行し、最後にまとめて報告する
+    let grewList=[], bornList=[], failedNames=[];
     for(const it of items){
       const name = norm(it.name);
       if(!name) continue;
-      const key = name.toLowerCase();
-      const ex = map.get(key);
-      // AIが座標を返さなかった場合も、既存の座標は消さずに残す
-      const co = validCoord(it.lat, it.lng);
-      const fields = {
-        type: it.type||'その他', name,
-        sort_year: Number.isFinite(it.sort_year)? Math.round(it.sort_year): null,
-        era_label: it.era_label||'', region: it.region||'', theme: it.theme||'',
-        lat: co? co.lat : (ex?.lat ?? null), lng: co? co.lng : (ex?.lng ?? null),
-        // AIが要約を返さなかった場合は既存の要約を消さずに残す
-        summary: it.updated_summary||it.new_fact||ex?.summary||'', user_id: currentUid
-      };
-      let itemId;
-      if(map.has(key)){
-        await dbRetry(()=>supa.from('hist_items').update({...fields, updated_at:new Date().toISOString()}).eq('id', ex.id), '項目の更新');
-        itemId = ex.id; grewList.push({id:itemId, name});
-      }else{
-        const ni = await dbRetry(()=>supa.from('hist_items').insert(fields).select().single(), '項目の作成');
-        itemId = ni.id; bornList.push({id:itemId, name});
-        map.set(key, ni);
-      }
-      if(it.new_fact){
-        await dbRetry(()=>supa.from('hist_facts').insert({ item_id:itemId, entry_id:entry.id, fact_text: it.new_fact, user_id: currentUid }), '情報の追加');
+      try{
+        const key = name.toLowerCase();
+        const ex = map.get(key);
+        // AIが座標を返さなかった場合も、既存の座標は消さずに残す
+        const co = validCoord(it.lat, it.lng);
+        // Number(null)は0になり「不明」と「西暦0年」の区別がつかなくなるため、
+        // null/undefined/空文字は先に弾いてから数値化する
+        const yearRaw = it.sort_year;
+        const yearNum = (yearRaw===null||yearRaw===undefined||yearRaw==='') ? NaN : Number(yearRaw);
+        const fields = {
+          // AIが値を返さなかった項目（type/年代/地域/テーマ）は、既存の値を消さずに残す
+          type: it.type || ex?.type || 'その他', name,
+          sort_year: Number.isFinite(yearNum) ? Math.round(yearNum) : (ex?.sort_year ?? null),
+          era_label: it.era_label || ex?.era_label || '',
+          region: it.region || ex?.region || '',
+          theme: it.theme || ex?.theme || '',
+          lat: co? co.lat : (ex?.lat ?? null), lng: co? co.lng : (ex?.lng ?? null),
+          // AIが要約を返さなかった場合は既存の要約を消さずに残す
+          summary: it.updated_summary||it.new_fact||ex?.summary||'', user_id: currentUid
+        };
+        let itemId;
+        if(ex){
+          await dbRetry(()=>supa.from('hist_items').update({...fields, updated_at:new Date().toISOString()}).eq('id', ex.id), '項目の更新');
+          itemId = ex.id; grewList.push({id:itemId, name});
+        }else{
+          const ni = await dbRetry(()=>supa.from('hist_items').insert(fields).select().single(), '項目の作成');
+          itemId = ni.id; bornList.push({id:itemId, name});
+          map.set(key, ni);
+        }
+        if(it.new_fact){
+          await dbRetry(()=>supa.from('hist_facts').insert({ item_id:itemId, entry_id:entry.id, fact_text: it.new_fact, user_id: currentUid }), '情報の追加');
+        }
+      }catch(itemErr){
+        console.error('項目の保存に失敗:', name, itemErr);
+        failedNames.push(name);
       }
     }
 
@@ -584,7 +644,7 @@ $('#btn-update').onclick = async ()=>{
     localStorage.removeItem(DRAFT_KEY);
     updateDraftBadge();
     lastUpdate = { grew: grewList, born: bornList };
-    showUpdateResult(grewList.length, bornList.length);
+    showUpdateResult(grewList.length, bornList.length, failedNames);
   }catch(err){
     console.error(err);
     if(err.message==='NO_KEY') showResult('Gemini APIキーが未設定です。「設定」で保存してください。', true);
@@ -603,9 +663,11 @@ function showResult(msg, isErr){
   const r=$('#result'); r.onclick=null; r.textContent=msg; r.className='result show'+(isErr?' err':'');
 }
 function hideResult(){ const r=$('#result'); r.onclick=null; r.className='result'; }
-function showUpdateResult(g,b){
+function showUpdateResult(g,b,failedNames){
   const r=$('#result'); r.className='result show clickable';
-  r.innerHTML=`✨ ${g}項目が育ち、${b}項目が新しく生まれました。<span class="result-more">タップで内容を見る ›</span>`;
+  let msg = `✨ ${g}項目が育ち、${b}項目が新しく生まれました。`;
+  if(failedNames && failedNames.length) msg += `（${esc(failedNames.join('、'))} の保存に失敗しました。もう一度更新すると再試行できます）`;
+  r.innerHTML=`${msg}<span class="result-more">タップで内容を見る ›</span>`;
   r.onclick=showUpdateDetail;
 }
 function showUpdateDetail(){
@@ -626,12 +688,12 @@ let allItems=[], factCounts={};
 async function loadTimeline(){
   const wrap=$('#tl-wrap');
   wrap.innerHTML='<div class="empty">読み込み中…</div>';
-  let items;
-  try{ items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false})); }
-  catch(e){ wrap.innerHTML='<div class="empty">読み込みに失敗しました</div>'; return; }
+  let items, facts;
+  try{
+    items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true}));
+    facts = await fetchAllRows('hist_facts','item_id');
+  }catch(e){ console.error(e); wrap.innerHTML='<div class="empty">読み込みに失敗しました</div>'; return; }
   allItems = items||[];
-  // fact数
-  const facts = await fetchAllRows('hist_facts','item_id');
   factCounts={}; (facts||[]).forEach(f=>factCounts[f.item_id]=(factCounts[f.item_id]||0)+1);
   updateFreshToggle(); renderTypeChips(); renderChips(); renderTimeline();
 }
@@ -667,10 +729,10 @@ function pickReview(){
       ${(i.type==='地域' && validCoord(i.lat,i.lng)) ? '<button id="rev-map">📍地図で見る</button>' : ''}
       <button id="rev-next">次の項目へ →</button>
     </div></div>`;
-  markReviewed(i);
-  $('#rev-open').onclick=()=>openDetail(i.id);
-  if($('#rev-map')) $('#rev-map').onclick=()=>goToMapFor(i);
-  $('#rev-next').onclick=pickReview;
+  // 表示しただけでは復習済みにせず、実際に開いた／次へ進んだ時だけ記録する
+  $('#rev-open').onclick=()=>{ markReviewed(i); openDetail(i.id); };
+  if($('#rev-map')) $('#rev-map').onclick=()=>{ markReviewed(i); goToMapFor(i); };
+  $('#rev-next').onclick=()=>{ markReviewed(i); pickReview(); };
 }
 function goToMapFor(item){
   document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('on'));
@@ -679,6 +741,9 @@ function goToMapFor(item){
   $('#v-timeline').classList.add('active');
   activeType = '地域';
   activeFilter = 'すべて';
+  // 検索・絞り込みが効いたままだと、地図で目的の項目が出てこないことがあるため解除する
+  searchQuery = ''; $('#search').value = '';
+  freshOnly = false; $('#fresh-toggle').classList.remove('on');
   mapMode = true;
   $('#map-toggle').classList.add('on');
   $('#map-toggle').textContent = '🗺 一覧にもどる';
@@ -694,7 +759,7 @@ function markReviewed(i){
   });
 }
 function updateFreshToggle(){
-  const n = allItems.filter(i=>i.updated_at && (Date.now()-new Date(i.updated_at).getTime()<FRESH_MS)).length;
+  const n = allItems.filter(isFresh).length;
   $('#fresh-toggle').textContent = n? `新着だけ（${n}）` : '新着だけ';
 }
 function renderTypeChips(){
@@ -719,9 +784,8 @@ function renderChips(){
   $('#chips').innerHTML = chips.map(c=>`<div class="chip${c===activeFilter?' on':''}" data-c="${esc(c)}">${esc(c)}</div>`).join('');
   $('#chips').querySelectorAll('.chip').forEach(ch=>ch.onclick=()=>{activeFilter=ch.dataset.c;renderChips();renderTimeline();});
 }
-const FRESH_MS = 24*60*60*1000;
 function cardHtml(i){
-  const fresh = i.updated_at && (Date.now()-new Date(i.updated_at).getTime() < FRESH_MS);
+  const fresh = isFresh(i);
   const sum = (i.summary||'').trim();
   return `<div class="card${fresh?' fresh':''}" data-id="${i.id}">
         <div class="name">${esc(i.name)}${fresh?'<span class="new-badge">新着</span>':''}</div>
@@ -733,7 +797,7 @@ function filteredItems(){
   let list = activeFilter==='すべて'? allItems : allItems.filter(i=>i.theme===activeFilter);
   if(activeType!=='すべて') list = list.filter(i=>i.type===activeType);
   if(searchQuery) list = list.filter(i=>(i.name||'').toLowerCase().includes(searchQuery.toLowerCase()));
-  if(freshOnly) list = list.filter(i=>i.updated_at && (Date.now()-new Date(i.updated_at).getTime()<FRESH_MS));
+  if(freshOnly) list = list.filter(isFresh);
   return list;
 }
 function renderTimeline(){
@@ -811,11 +875,13 @@ function ensureLeaflet(){
 async function renderMapView(list){
   const wrap = $('#tl-wrap');
   const gen = mapGen;                              // 読み込み中に再描画が入ったら、この回は捨てる
-  const withCoord = list.filter(i=>validCoord(i.lat, i.lng));
+  const withCoordEntries = list.map(i=>({item:i, coord:validCoord(i.lat, i.lng)})).filter(e=>e.coord);
+  const withCoord = withCoordEntries.map(e=>e.item);
   const without   = list.filter(i=>!validCoord(i.lat, i.lng));
   if(!withCoord.length){
     wrap.innerHTML = `<div class="empty">この条件では、地図に置ける項目がまだありません。<br>
       「設定」の「地域の項目に座標をつける」を押すと、AIが緯度経度をまとめて付けます。</div>`;
+    focusMapItemId = null;   // ここで消しておかないと、次に地図を開いた時に無関係な項目へズームしてしまう
     return;
   }
   wrap.innerHTML = '<div class="empty">地図を読み込み中…</div>';
@@ -842,13 +908,12 @@ async function renderMapView(list){
   leafLayer = L.layerGroup().addTo(leafMap);
   const pts = [];
   const markerById = {};
-  withCoord.forEach(i=>{
-    const c = validCoord(i.lat, i.lng);
+  withCoordEntries.forEach(({item:i, coord:c})=>{
     pts.push([c.lat, c.lng]);
     markerById[i.id] = L.circleMarker([c.lat, c.lng], {
       radius:8, color:'#ffffff', weight:2, fillColor:typeColor('地域'), fillOpacity:.9
     }).addTo(leafLayer)
-      .bindTooltip(i.name, { direction:'top', className:'map-pin-label' })
+      .bindTooltip(esc(i.name), { direction:'top', className:'map-pin-label' })
       .on('click', ()=>openDetail(i.id));
   });
   leafMap.fitBounds(L.latLngBounds(pts), { padding:[28,28], maxZoom:9 });
@@ -856,13 +921,13 @@ async function renderMapView(list){
   // 振り返りカードから特定の項目へ来たときは、その場所にズームしてピンを開く
   const focusId = focusMapItemId;
   focusMapItemId = null;
-  const focusTarget = focusId!=null ? withCoord.find(i=>String(i.id)===String(focusId)) : null;
-  if(focusTarget){
-    const c = validCoord(focusTarget.lat, focusTarget.lng);
+  const focusEntry = focusId!=null ? withCoordEntries.find(e=>String(e.item.id)===String(focusId)) : null;
+  if(focusEntry){
+    const c = focusEntry.coord;
     setTimeout(()=>{
       if(gen!==mapGen || !leafMap) return;
       leafMap.setView([c.lat, c.lng], 8);
-      const m = markerById[focusTarget.id];
+      const m = markerById[focusEntry.item.id];
       if(m) m.openTooltip();
     }, 100);
   }
@@ -915,8 +980,22 @@ async function openDetail(id){
   $('#d-edit').onclick=()=>openEdit(item);
   $('#d-del').onclick=async()=>{
     if(!confirm(`「${item.name}」を削除しますか？（この項目の情報も消えます。削除前に内容をファイルに保存します）`)) return;
-    downloadBackupMd([item], facts||[], `削除_${item.name}`);
-    await supa.from('hist_items').delete().eq('id',id);
+    const btn = $('#d-del'); btn.disabled = true; btn.textContent = '削除しています…';
+    try{
+      const saved = downloadBackupMd([item], facts||[], `削除_${item.name}`);
+      if(!saved){
+        if(!confirm('バックアップファイルの保存に失敗した可能性があります。バックアップ無しで削除しますか？')){
+          btn.disabled = false; btn.textContent = 'この項目を削除'; return;
+        }
+      }
+      const { error } = await supa.from('hist_items').delete().eq('id',id);
+      if(error) throw error;
+    }catch(e){
+      console.error('削除に失敗:', e);
+      alert('削除できませんでした：'+(e.message||e));
+      btn.disabled = false; btn.textContent = 'この項目を削除';
+      return;
+    }
     closeDetail(); loadTimeline();
   };
   $('#overlay').classList.add('show');
@@ -969,12 +1048,16 @@ let currentUid = null;
 const authScreen = $('#auth-screen');
 function authMsg(m, ok){ const e=$('#au-msg'); e.textContent=m; e.className='auth-msg'+(m?(ok?' ok':' err'):''); }
 
-supa.auth.onAuthStateChange((_e, session)=>{
+// supabase-js v2はページ読み込み時にonAuthStateChangeがINITIAL_SESSIONで必ず一度発火するため、
+// getSession()による起動時チェックを別途行う必要はない（以前は二重に走っていた）。
+// TOKEN_REFRESHED（約1時間ごと）でも発火するので、そのときは全件読み直しなどは行わない。
+supa.auth.onAuthStateChange((event, session)=>{
   if(session && session.user){
     currentUid = session.user.id;
     authScreen.classList.add('hide');
     $('#who').textContent = 'ログイン中：'+(session.user.email||'');
     if(session.user.email) localStorage.setItem('last_email', session.user.email);
+    if(event==='TOKEN_REFRESHED') return;
     loadGeminiKeyFromCloud();
     loadReview();
   }else{
@@ -982,19 +1065,6 @@ supa.auth.onAuthStateChange((_e, session)=>{
     authScreen.classList.remove('hide');
   }
 });
-
-(async ()=>{
-  const { data } = await supa.auth.getSession();
-  if(data.session && data.session.user){
-    currentUid = data.session.user.id;
-    authScreen.classList.add('hide');
-    $('#who').textContent = 'ログイン中：'+(data.session.user.email||'');
-    loadGeminiKeyFromCloud();
-    loadReview();
-  }else{
-    authScreen.classList.remove('hide');
-  }
-})();
 
 $('#au-form').onsubmit = async (ev)=>{
   ev.preventDefault();
@@ -1055,30 +1125,18 @@ const GEO_SCHEMA = {
 };
 async function geocodeBatch(rows){
   const res = await geminiCall(buildGeocodePrompt(rows), GEO_SCHEMA);
-  const data = await res.json();
-  const txt = (data?.candidates?.[0]?.content?.parts?.[0]?.text || '')
-    .replace(/^```json\s*/i,'').replace(/```$/,'').trim();
-  if(!txt){
-    // 本文が空。理由（安全フィルタ・トークン切れ等）を添えて投げる
-    const why = data?.candidates?.[0]?.finishReason || data?.promptFeedback?.blockReason || '理由不明';
-    throw new Error('AIが空の応答を返しました（'+why+'）');
-  }
-  let parsed;
-  try{ parsed = JSON.parse(txt); }
-  catch(e){ console.error('座標JSONの解析に失敗。AIの生応答:', txt); throw new Error('AIの返事がJSONとして読めませんでした'); }
-  const arr = Array.isArray(parsed) ? parsed : (parsed.items || parsed.places || parsed.results);
-  if(!Array.isArray(arr)){ console.error('想定外のJSON構造:', parsed); throw new Error('AIの返事に items 配列がありませんでした'); }
-  return arr;
+  return parseGeminiItems(await res.json());
 }
 $('#btn-geocode').onclick = async ()=>{
   const b=$('#btn-geocode'), st=$('#geo-status');
   if(!getGeminiKey()){ st.textContent='先に上でGemini APIキーを保存してください。'; return; }
   b.disabled=true; st.textContent='対象を数えています…';
+  activeStatusSel = '#geo-status';
   let done=0, notFound=0, apiFailed=0, firstErr='';
   try{
     const items = await fetchAllRows('hist_items','id,name,type,era_label,region,lat,lng');
     const targets = (items||[]).filter(i=>i.type==='地域' && !validCoord(i.lat, i.lng));
-    if(!targets.length){ st.textContent='座標が必要な「地域」の項目はありませんでした。'; b.disabled=false; return; }
+    if(!targets.length){ st.textContent='座標が必要な「地域」の項目はありませんでした。'; b.disabled=false; activeStatusSel=null; return; }
     const SIZE = 12;                                  // 1回の出力を短く保つ
     for(let s=0; s<targets.length; s+=SIZE){
       const chunk = targets.slice(s, s+SIZE);
@@ -1099,13 +1157,13 @@ $('#btn-geocode').onclick = async ()=>{
         if(!row || !co) continue;
         try{
           await dbRetry(()=>supa.from('hist_items').update({ lat:co.lat, lng:co.lng }).eq('id', row.id), '座標の保存');
-          byName.delete(norm(o.name));
           done++;
         }catch(e){
           console.error('座標の保存に失敗:', e);
           apiFailed++;
           if(!firstErr) firstErr = '保存できませんでした：' + (e.message||e);
         }
+        byName.delete(norm(o.name));   // 成功・失敗どちらでも「未反映」からは外す（notFoundとの二重計上を防ぐ）
       }
       notFound += byName.size;                        // AIが返さなかった／場所を特定できなかった分
     }
@@ -1118,6 +1176,7 @@ $('#btn-geocode').onclick = async ()=>{
     console.error(e);
     st.textContent = 'うまくいきませんでした：' + (e.message==='NO_KEY' ? 'Gemini APIキーが未設定です' : (e.message||e));
   }
+  activeStatusSel = null;
   b.disabled=false;
 };
 
@@ -1125,6 +1184,7 @@ $('#btn-geocode').onclick = async ()=>{
 $('#btn-dupes').onclick = async ()=>{
   const b=$('#btn-dupes'), st=$('#dupe-status'), list=$('#dupe-list');
   b.disabled=true; st.textContent='さがしています…'; list.innerHTML='';
+  activeStatusSel = '#dupe-status';
   try{
     const items = await fetchAllRows('hist_items','id,name,type,summary,region,era_label,theme,lat,lng,created_at');
     const groups = new Map();
@@ -1136,7 +1196,7 @@ $('#btn-dupes').onclick = async ()=>{
     });
     const dupeGroups = [...groups.values()].filter(g=>g.length>1)
       .sort((a,b)=>a[0].name.localeCompare(b[0].name,'ja'));
-    if(!dupeGroups.length){ st.textContent='同じ名前の項目は見つかりませんでした。'; b.disabled=false; return; }
+    if(!dupeGroups.length){ st.textContent='同じ名前の項目は見つかりませんでした。'; b.disabled=false; activeStatusSel=null; return; }
     st.textContent = `同じ名前の項目が${dupeGroups.length}組見つかりました。残す方を選んで「まとめる」を押してください。`;
     list.innerHTML = dupeGroups.map((g,gi)=>`
       <div class="dupe-group" data-gi="${gi}">
@@ -1162,7 +1222,10 @@ $('#btn-dupes').onclick = async ()=>{
         btn.disabled = true; btn.textContent = 'まとめています…';
         try{
           const otherFacts = await fetchAllRows('hist_facts','*',q=>q.in('item_id', others.map(o=>o.id)).order('added_date',{ascending:true}));
-          downloadBackupMd(others, otherFacts, `統合_${keep.name}`);
+          const saved = downloadBackupMd(others, otherFacts, `統合_${keep.name}`);
+          if(!saved && !confirm('バックアップファイルの保存に失敗した可能性があります。バックアップ無しでまとめますか？')){
+            btn.disabled=false; btn.textContent='この項目にまとめる'; return;
+          }
           await mergeDuplicateItems(keep, others);
         }
         catch(e){ console.error(e); alert('まとめられませんでした：'+(e.message||e)); btn.disabled=false; btn.textContent='この項目にまとめる'; return; }
@@ -1174,6 +1237,7 @@ $('#btn-dupes').onclick = async ()=>{
     console.error(e);
     st.textContent = 'うまくいきませんでした：' + (e.message||e);
   }
+  activeStatusSel = null;
   b.disabled=false;
 };
 async function mergeDuplicateItems(keep, others){
@@ -1203,17 +1267,22 @@ function buildBackupMd(items, facts){
   return md;
 }
 // 削除・統合のように取り消せない操作の直前に、消える内容をファイルとして残す
+// 戻り値はダウンロードを開始できたかどうかの目安（iOSのホーム画面追加時などはブラウザが
+// エラーを出さずに黙って失敗することがあるため、あくまでベストエフォートの確認）
 function downloadBackupMd(items, facts, filenameStub){
-  const md = buildBackupMd(items, facts);
-  const blob = new Blob([md],{type:'text/markdown;charset=utf-8'});
-  const url=URL.createObjectURL(blob); const a=document.createElement('a');
-  a.href=url; a.download=`歴史ログ_${filenameStub}_${new Date().toISOString().slice(0,10)}.md`;
-  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  try{
+    const md = buildBackupMd(items, facts);
+    const blob = new Blob([md],{type:'text/markdown;charset=utf-8'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download=`歴史ログ_${filenameStub}_${new Date().toISOString().slice(0,10)}.md`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    return true;
+  }catch(e){ console.error('バックアップの書き出しに失敗:', e); return false; }
 }
 $('#btn-export').onclick = async ()=>{
   const b=$('#btn-export'); b.disabled=true; b.textContent='書き出し中…';
   try{
-    const items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}));
+    const items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true}));
     const facts = await fetchAllRows('hist_facts','*',q=>q.order('added_date',{ascending:true}));
     downloadBackupMd(items, facts, '全データ');
   }catch(e){ alert('書き出しに失敗しました：'+(e.message||e)); }
