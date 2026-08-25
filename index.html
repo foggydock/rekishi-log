@@ -301,6 +301,10 @@ const GEMINI_MODEL = 'gemini-2.5-flash';
 const $ = s => document.querySelector(s);
 const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const norm = s => (s||'').trim();
+// 重複さがし用の緩いキー。全角/半角・中点や長音符などの表記ゆれを吸収する。
+// DBのユニーク制約は完全一致しか防げないため、これがないと「重複しそうな項目をさがす」が
+// 事実上何も見つけられなかった（例:「COTEN RADIO」と「COTENRADIO」、「オーデル川」と「オデル川」）
+const dupeKey = s => norm(s).normalize('NFKC').toLowerCase().replace(/[\s・\-–—ー]/g,'');
 const FRESH_MS = 24*60*60*1000;
 const isFresh = i => !!(i.updated_at && (Date.now()-new Date(i.updated_at).getTime() < FRESH_MS));
 function typeClass(t){ return ({'人物':'ty-person','出来事':'ty-event','地域':'ty-place','テーマ':'ty-theme'})[t] || 'ty-other'; }
@@ -1189,7 +1193,7 @@ $('#btn-dupes').onclick = async ()=>{
     const items = await fetchAllRows('hist_items','id,name,type,summary,region,era_label,theme,lat,lng,created_at');
     const groups = new Map();
     (items||[]).forEach(it=>{
-      const key = norm(it.name).toLowerCase();
+      const key = dupeKey(it.name);
       if(!key) return;
       if(!groups.has(key)) groups.set(key, []);
       groups.get(key).push(it);
