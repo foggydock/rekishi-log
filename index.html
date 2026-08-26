@@ -492,12 +492,23 @@ const EXTRACT_SCHEMA = {
   } } },
   required:['items']
 };
+// 今日のテキストに全く関係なさそうな既存項目まで毎回プロンプトに含めると、項目数が増えるほど
+// プロンプトが肥大化し混雑時の失敗率が上がる。名前の一部（2文字以上の部分文字列）がテキスト中に
+// 出現する項目だけに絞る。「信長」→「織田信長」のような略称参照も部分文字列なら拾える。
+function nameMentioned(name, text){
+  if(name.length <= 1) return text.includes(name);   // 1文字の名前（「唐」「秦」等）は部分文字列にできないため直接判定
+  for(let len=Math.min(name.length,6); len>=2; len--){
+    for(let i=0; i+len<=name.length; i++){
+      if(text.includes(name.slice(i, i+len))) return true;
+    }
+  }
+  return false;
+}
 async function extractItems(rawText, existingItems){
-  // 既存項目リストは名前だけに絞る（要約まで含めるとプロジェクトが育つほどプロンプトが肥大化し、
-  // Gemini混雑時の失敗率が上がる原因になっていた）
-  const existingList = existingItems.length
-    ? existingItems.map(i=>`- ${i.name}`).join('\n')
-    : '（まだありません）';
+  const candidates = existingItems.filter(i => i.name && nameMentioned(i.name, rawText));
+  const existingList = candidates.length
+    ? candidates.map(i=>`- ${i.name}`).join('\n')
+    : '（テキスト中に一致しそうな既存項目はありません）';
   const prompt = `あなたは歴史データベースの整理係です。下の「今日のテキスト」から、歴史上の項目（人物・出来事・テーマ・地域・その他）を抽出してください。
 
 【既存の項目リスト】同じ対象を指すならこの名前をそのまま使い、重複を作らないこと。
