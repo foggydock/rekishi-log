@@ -525,6 +525,14 @@ ${rawText}
   return parseGeminiItems(await res.json());
 }
 
+/* ---------- 古い元テキストの自動削除（hist_entriesは重複確認用の一時データなので溜め続けない） ---------- */
+async function cleanupOldEntries(){
+  try{
+    const cutoff = new Date(Date.now() - 30*24*60*60*1000).toISOString();
+    await supa.from('hist_entries').delete().eq('user_id', currentUid).lt('created_at', cutoff);
+  }catch(e){ console.error('古い記録の自動削除に失敗:', e); }
+}
+
 /* ---------- 下書き自動保存（Gemini混雑等で更新に失敗しても入力が消えないように） ---------- */
 const DRAFT_KEY = 'raw_draft';
 $('#raw').value = localStorage.getItem(DRAFT_KEY) || '';
@@ -1068,6 +1076,7 @@ supa.auth.onAuthStateChange((event, session)=>{
     if(event==='TOKEN_REFRESHED') return;
     loadGeminiKeyFromCloud();
     loadReview();
+    cleanupOldEntries();
   }else{
     currentUid = null;
     authScreen.classList.remove('hide');
