@@ -60,7 +60,7 @@
   .rev-head{font-size:12px;color:var(--muted);margin-bottom:8px}
   .rev-name{font-size:17px;font-weight:600}
   .rev-meta{font-size:12px;color:var(--muted);margin:3px 0 8px}
-  .rev-sum{font-size:13px;line-height:1.6;max-height:4.8em;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  .rev-sum{font-size:13px;line-height:1.6;max-height:4.8em;overflow-y:auto;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
   .rev-actions{display:flex;gap:8px;margin-top:13px}
   .rev-actions button{flex:1;padding:10px;border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:10px;font-size:13px;font-family:inherit;cursor:pointer}
   .rev-actions button.primary-act{background:var(--accent);color:#fff;border-color:var(--accent)}
@@ -163,6 +163,10 @@
   @media (min-width:900px){
     body.map-open .wrap{max-width:1100px}
     #map{height:78vh}
+  }
+  /* PCは画面に余裕があるので、振り返りの要約枠も少し広く取ってスクロール量を減らす */
+  @media (min-width:640px){
+    .rev-sum{max-height:9.6em}
   }
 
   /* settings */
