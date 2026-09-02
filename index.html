@@ -736,11 +736,15 @@ function pickReview(){
   if(!allItems.length){ wrap.style.display='none'; return; }
   // 長く復習していない項目ほど選ばれやすくする（未復習を最優先）。
   // 完全に古い順だと毎回同じ並びになるため、上位2割からランダムに1件選ぶ。
-  const sorted = [...allItems].sort((a,b)=>{
-    const ta = a.last_reviewed_at ? new Date(a.last_reviewed_at).getTime() : -Infinity;
-    const tb = b.last_reviewed_at ? new Date(b.last_reviewed_at).getTime() : -Infinity;
-    return ta - tb;
+  // 未復習(last_reviewed_at=null)同士は全て同じ古さ扱いになり、安定ソートのため
+  // 元の並び順（年代順）のまま固定されてしまう。同点内はランダムに並べ直す。
+  const withRandKey = allItems.map(x=>({x, rk:Math.random()}));
+  withRandKey.sort((a,b)=>{
+    const ta = a.x.last_reviewed_at ? new Date(a.x.last_reviewed_at).getTime() : -Infinity;
+    const tb = b.x.last_reviewed_at ? new Date(b.x.last_reviewed_at).getTime() : -Infinity;
+    return (ta - tb) || (a.rk - b.rk);
   });
+  const sorted = withRandKey.map(w=>w.x);
   const poolSize = Math.max(1, Math.ceil(sorted.length*0.2));
   const pool = sorted.slice(0, poolSize);
   const i = pool[Math.floor(Math.random()*pool.length)];
