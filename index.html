@@ -64,6 +64,8 @@
   .rev-actions{display:flex;gap:8px;margin-top:13px}
   .rev-actions button{flex:1;padding:10px;border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:10px;font-size:13px;font-family:inherit;cursor:pointer}
   .rev-actions button.primary-act{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .rev-delete{display:block;margin-top:12px;padding:10px 0;background:none;border:0;color:var(--danger);font:inherit;font-size:12px;cursor:pointer}
+  .rev-card button:disabled{opacity:.5;cursor:wait}
   .spinner{
     width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);
     border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite
@@ -759,11 +761,13 @@ function pickReview(){
       <button class="primary-act" id="rev-open">この項目を開く</button>
       ${(i.type==='地域' && validCoord(i.lat,i.lng)) ? '<button id="rev-map">📍地図で見る</button>' : ''}
       <button id="rev-next">次の項目へ →</button>
-    </div></div>`;
+    </div>
+    <button class="rev-delete" id="rev-delete">この項目を削除</button></div>`;
   // 表示しただけでは復習済みにせず、実際に開いた／次へ進んだ時だけ記録する
   $('#rev-open').onclick=()=>{ markReviewed(i); openDetail(i.id); };
   if($('#rev-map')) $('#rev-map').onclick=()=>{ markReviewed(i); goToMapFor(i); };
   $('#rev-next').onclick=()=>{ markReviewed(i); pickReview(); };
+  $('#rev-delete').onclick=()=>deleteItem(i, $('#rev-delete'));
 }
 function goToMapFor(item){
   document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('on'));
@@ -1009,27 +1013,47 @@ async function openDetail(id){
   $('#sheet').querySelectorAll('.rel-chip').forEach(c=>c.onclick=()=>openDetail(c.dataset.rid));
   if($('#d-map')) $('#d-map').onclick=()=>{ closeDetail(); goToMapFor(item); };
   $('#d-edit').onclick=()=>openEdit(item);
-  $('#d-del').onclick=async()=>{
+  $('#d-del').onclick=()=>deleteItem(item, $('#d-del'));
+  $('#overlay').classList.add('show');
+}
+let deletingItem = false;
+async function deleteItem(item, btn){
+    if(deletingItem) return;
     if(!confirm(`「${item.name}」を削除しますか？（この項目の情報も消えます。削除前に内容をファイルに保存します）`)) return;
-    const btn = $('#d-del'); btn.disabled = true; btn.textContent = '削除しています…';
+    deletingItem = true;
+    const label = btn.textContent;
+    const reviewButtons = [...$('#review').querySelectorAll('button')];
+    reviewButtons.forEach(b=>b.disabled=true);
+    btn.disabled = true; btn.textContent = '削除しています…';
     try{
-      const saved = downloadBackupMd([item], facts||[], `削除_${item.name}`);
+      // 詳細画面の取得結果を流用せず、全件取得に成功してからバックアップする。
+      const facts = await fetchAllRows('hist_facts','*',q=>q.eq('item_id',item.id).order('id',{ascending:true}));
+      const saved = downloadBackupMd([item], facts, `削除_${item.name}`);
       if(!saved){
         if(!confirm('バックアップファイルの保存に失敗した可能性があります。バックアップ無しで削除しますか？')){
-          btn.disabled = false; btn.textContent = 'この項目を削除'; return;
+          return;
         }
       }
-      const { error } = await supa.from('hist_items').delete().eq('id',id);
+      const { data, error } = await supa.from('hist_items').delete().eq('id',item.id).eq('user_id',currentUid).select('id');
       if(error) throw error;
+      if(!data || data.length!==1) throw new Error('削除を確認できませんでした。画面を再読み込みして確認してください。');
+      // 通信による再取得が失敗しても、削除した項目をキャッシュやカードに残さない。
+      allItems = allItems.filter(i=>String(i.id)!==String(item.id));
+      delete factCounts[item.id];
+      if(lastUpdate){
+        for(const key of ['born','grew']) lastUpdate[key] = lastUpdate[key].filter(i=>String(i.id)!==String(item.id));
+      }
+      closeDetail();
+      pickReview();
+      updateFreshToggle(); renderTypeChips(); renderChips(); renderTimeline();
     }catch(e){
       console.error('削除に失敗:', e);
       alert('削除できませんでした：'+(e.message||e));
-      btn.disabled = false; btn.textContent = 'この項目を削除';
-      return;
+    }finally{
+      deletingItem = false;
+      reviewButtons.forEach(b=>b.disabled=false);
+      btn.disabled = false; btn.textContent = label;
     }
-    closeDetail(); loadTimeline();
-  };
-  $('#overlay').classList.add('show');
 }
 function openEdit(item){
   const types=['人物','出来事','テーマ','地域','その他'];
