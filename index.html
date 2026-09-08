@@ -65,6 +65,7 @@
   .rev-actions button{flex:1;padding:10px;border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:10px;font-size:13px;font-family:inherit;cursor:pointer}
   .rev-actions button.primary-act{background:var(--accent);color:#fff;border-color:var(--accent)}
   .rev-delete{display:block;margin-top:12px;padding:10px 0;background:none;border:0;color:var(--danger);font:inherit;font-size:12px;cursor:pointer}
+  .rev-exclude{display:block;width:100%;margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--muted);font:inherit;font-size:13px;cursor:pointer}
   .rev-card button:disabled{opacity:.5;cursor:wait}
   .spinner{
     width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);
@@ -728,27 +729,39 @@ async function loadTimeline(){
 }
 /* ---------- 今日の振り返り（ランダム復習） ---------- */
 async function loadReview(){
-  if(!allItems.length){
+  try{
+    // 別端末で変更した振り返り設定も、記録タブを開いたときに反映する。
     allItems = await fetchAllRows('hist_items','*');
+    pickReview();
+  }catch(e){
+    console.error('振り返りの取得に失敗:', e);
+    const wrap=$('#review'); wrap.style.display='block';
+    wrap.innerHTML='<div class="rev-card">振り返りを読み込めませんでした。<button class="rev-exclude" id="rev-retry">再読み込み</button></div>';
+    $('#rev-retry').onclick=loadReview;
   }
-  pickReview();
 }
 function pickReview(){
   const wrap=$('#review');
   if(!allItems.length){ wrap.style.display='none'; return; }
+  const candidates = allItems.filter(i=>!i.review_excluded);
+  if(!candidates.length){
+    wrap.style.display='block';
+    wrap.innerHTML='<div class="rev-card"><div class="rev-head">📖 今日の振り返り</div><div class="hint">振り返りの対象がありません。記録は年表に残っています。項目を開いて「振り返りの対象に戻す」を押すと再開できます。</div></div>';
+    return;
+  }
   // 長く復習していない項目ほど選ばれやすくする（未復習を最優先）が、選ばれる可能性は
-  // 全項目に残す。「上位2割から一様ランダム」だと項目数が少ない時に毎回同じ顔ぶれの中
+  // 対象項目に残す。「上位2割から一様ランダム」だと項目数が少ない時に毎回同じ顔ぶれの中
   // でしか選ばれず、未復習(last_reviewed_at=null)同士は経過日数が全部同じになるため
   // 偏りが出やすかった。経過日数に比例した重み付きランダム抽選に置き換える。
   const now = Date.now();
   const daysSince = i => i.last_reviewed_at ? (now - new Date(i.last_reviewed_at).getTime())/86400000 : 3650; // 未復習は「10年分」相当の重みにする
-  const weights = allItems.map(x => daysSince(x) + 1); // +1 で経過0日でも選ばれる余地を残す
+  const weights = candidates.map(x => daysSince(x) + 1); // +1 で経過0日でも選ばれる余地を残す
   const totalWeight = weights.reduce((a,b)=>a+b, 0);
   let r = Math.random()*totalWeight;
-  let i = allItems[allItems.length-1];
-  for(let k=0; k<allItems.length; k++){
+  let i = candidates[candidates.length-1];
+  for(let k=0; k<candidates.length; k++){
     r -= weights[k];
-    if(r <= 0){ i = allItems[k]; break; }
+    if(r <= 0){ i = candidates[k]; break; }
   }
   const meta=[i.era_label,i.region,i.theme].filter(Boolean).join(' ・ ');
   wrap.style.display='block';
@@ -762,12 +775,47 @@ function pickReview(){
       ${(i.type==='地域' && validCoord(i.lat,i.lng)) ? '<button id="rev-map">📍地図で見る</button>' : ''}
       <button id="rev-next">次の項目へ →</button>
     </div>
+    <button class="rev-exclude" id="rev-exclude">今後の振り返りに出さない</button>
+    <div class="hint" style="margin-top:5px">記録は年表に残ります。項目の詳細から戻せます。</div>
     <button class="rev-delete" id="rev-delete">この項目を削除</button></div>`;
   // 表示しただけでは復習済みにせず、実際に開いた／次へ進んだ時だけ記録する
   $('#rev-open').onclick=()=>{ markReviewed(i); openDetail(i.id); };
   if($('#rev-map')) $('#rev-map').onclick=()=>{ markReviewed(i); goToMapFor(i); };
   $('#rev-next').onclick=()=>{ markReviewed(i); pickReview(); };
   $('#rev-delete').onclick=()=>deleteItem(i, $('#rev-delete'));
+  $('#rev-exclude').onclick=()=>setReviewExcluded(i, true, $('#rev-exclude'));
+}
+let savingReviewSetting = false;
+async function setReviewExcluded(item, excluded, btn){
+  if(savingReviewSetting) return;
+  savingReviewSetting = true;
+  const label = btn.textContent;
+  const buttons = [...$('#review').querySelectorAll('button'), btn];
+  buttons.forEach(b=>b.disabled=true);
+  btn.textContent='保存しています…';
+  try{
+    const {data,error} = await supa.from('hist_items').update({review_excluded:excluded})
+      .eq('id',item.id).eq('user_id',currentUid).select('id,review_excluded');
+    if(error) throw error;
+    if(!data || data.length!==1 || data[0].review_excluded!==excluded){
+      throw new Error('保存を確認できませんでした。再読み込みしてお試しください。');
+    }
+    item.review_excluded = excluded;
+    const cached = allItems.find(i=>String(i.id)===String(item.id));
+    if(cached) cached.review_excluded = excluded;
+    // 詳細を閉じずに切り替えられる。開き直した場合もDBに保存した状態から表示する。
+    if(btn.id==='d-review'){
+      btn.textContent=excluded?'振り返りの対象に戻す':'今後の振り返りに出さない';
+    }
+    pickReview();
+  }catch(e){
+    console.error('振り返り設定の保存に失敗:', e);
+    alert('振り返り設定を保存できませんでした：'+(e.message||e));
+  }finally{
+    if(btn.textContent==='保存しています…') btn.textContent=label;
+    buttons.forEach(b=>b.disabled=false);
+    savingReviewSetting = false;
+  }
 }
 function goToMapFor(item){
   document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('on'));
@@ -1008,11 +1056,14 @@ async function openDetail(id){
     ${relatedHtml}
     ${(item.type==='地域' && validCoord(item.lat,item.lng)) ? '<button class="edit-btn" id="d-map">📍地図で見る</button>' : ''}
     <button class="edit-btn" id="d-edit">この項目を編集</button>
+    <button class="edit-btn" id="d-review">${item.review_excluded?'振り返りの対象に戻す':'今後の振り返りに出さない'}</button>
+    <div class="hint">振り返りの対象から外しても、記録は年表に残ります。</div>
     <button class="del" id="d-del">この項目を削除</button>`;
   $('#d-close').onclick=closeDetail;
   $('#sheet').querySelectorAll('.rel-chip').forEach(c=>c.onclick=()=>openDetail(c.dataset.rid));
   if($('#d-map')) $('#d-map').onclick=()=>{ closeDetail(); goToMapFor(item); };
   $('#d-edit').onclick=()=>openEdit(item);
+  $('#d-review').onclick=()=>setReviewExcluded(item, !item.review_excluded, $('#d-review'));
   $('#d-del').onclick=()=>deleteItem(item, $('#d-del'));
   $('#overlay').classList.add('show');
 }
