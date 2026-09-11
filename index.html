@@ -547,6 +547,21 @@ async function cleanupOldEntries(){
   }catch(e){ console.error('古い記録の自動削除に失敗:', e); }
 }
 
+// 本文そのものを .eq('raw_text', raw) の条件にすると、長い文字起こしがURLに展開される。
+// URL長の上限や PostgREST のフィルタ構文に引っ掛かって 400 になるため、本文は受信後に比較する。
+// hist_entries は30日で掃除する一時データだが、掃除されていない古い行があっても見落とさないよう
+// ページングして調べる。
+async function findDuplicateEntry(raw){
+  const pageSize = 1000;
+  for(let from=0;;from+=pageSize){
+    const page = await dbRetry(()=>supa.from('hist_entries').select('id,created_at,raw_text')
+      .eq('user_id', currentUid).order('created_at',{ascending:false}).range(from,from+pageSize-1), '記録の重複確認');
+    const duplicate = page.find(entry=>entry.raw_text===raw);
+    if(duplicate) return duplicate;
+    if(page.length < pageSize) return null;
+  }
+}
+
 /* ---------- 下書き自動保存（Gemini混雑等で更新に失敗しても入力が消えないように） ---------- */
 const DRAFT_KEY = 'raw_draft';
 $('#raw').value = localStorage.getItem(DRAFT_KEY) || '';
@@ -605,8 +620,7 @@ $('#btn-update').onclick = async ()=>{
   try{
     // 0) 同じ本文がすでに保存済みなら確認する。Gemini混雑等の失敗後に「更新する」を
     //    押し直すと、以前は同じ記録・同じ情報がそのまま重複して積み上がっていたため
-    const dupEntry = await dbRetry(()=>supa.from('hist_entries').select('id,created_at')
-      .eq('user_id', currentUid).eq('raw_text', raw).order('created_at',{ascending:false}).limit(1).maybeSingle(), '記録の重複確認');
+    const dupEntry = await findDuplicateEntry(raw);
     if(dupEntry){
       const d = new Date(dupEntry.created_at);
       const when = `${d.getMonth()+1}月${d.getDate()}日 ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`;
