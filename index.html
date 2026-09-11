@@ -251,17 +251,14 @@
   <!-- 設定 -->
   <section id="v-settings" class="view">
     <div class="field">
-      <label>Gemini APIキー</label>
-      <div class="hint">アカウントに保存され、ログインしていればスマホ・PCどちらでも使えます（公開されません）。家計簿アプリと同じキーでOK。</div>
-      <input id="gkey" type="password" placeholder="AIza... で始まるキー">
-      <div class="saved" id="gsaved">保存しました</div>
+      <label>AIの接続</label>
+      <div class="hint">Gemini APIキーはこの画面や端末には保存せず、サーバー側で安全に管理しています。ログイン済みの利用者だけがAI処理を実行できます。</div>
     </div>
-    <button class="primary" id="btn-savekey">キーを保存</button>
     <div class="field" style="margin-top:28px">
       <div class="hint">データはSupabaseに保存され、ログインすればスマホ・PCどちらからでも同じものが見られます。貼った元の文章も丸ごと保存されるので、振り分けが変でもやり直せます。</div>
     </div>
     <div class="field">
-      <div class="hint">種類が「地域」の項目に、地図表示用の緯度経度をAIでまとめて付けます。まだ座標が無いものだけが対象なので、何度押しても大丈夫です（Gemini APIキーが必要）。</div>
+      <div class="hint">種類が「地域」の項目に、地図表示用の緯度経度をAIでまとめて付けます。まだ座標が無いものだけが対象なので、何度押しても大丈夫です。</div>
       <button class="edit-btn" id="btn-geocode" style="margin-top:0">地域の項目に座標をつける</button>
       <div class="hint" id="geo-status" style="margin-top:8px"></div>
     </div>
@@ -303,7 +300,6 @@
 const SUPABASE_URL = 'https://icxbyltorjpfexmwxzga.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_6qgfCo_xbhbjb3Lr__j-Yg_Y7Zk2yWH';
 const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-const GEMINI_MODEL = 'gemini-2.5-flash';
 
 const $ = s => document.querySelector(s);
 const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -346,30 +342,11 @@ document.querySelectorAll('nav.tabs button').forEach(b=>{
   };
 });
 
-/* ---------- 設定（Geminiキー） ---------- */
-// 端末のlocalStorageはオフライン時などのキャッシュとして使い、正はSupabase(hist_settings)に置く。
-// こうすることでPC・スマホどちらでキーを保存しても、もう一方の端末で再入力しなくてよくなる。
-$('#gkey').value = localStorage.getItem('gemini_key') || '';
+/* ---------- AI接続 ---------- */
+// APIキーはブラウザや通常のテーブルには置かない。認証済みユーザーだけが
+// Supabase Edge Functionを通じてGeminiを使うため、過去バージョンの端末内キーも消す。
+localStorage.removeItem('gemini_key');
 $('#au-email').value = localStorage.getItem('last_email') || '';
-function getGeminiKey(){ return localStorage.getItem('gemini_key') || ''; }
-async function loadGeminiKeyFromCloud(){
-  try{
-    const { data } = await supa.from('hist_settings').select('gemini_key').eq('user_id', currentUid).maybeSingle();
-    if(data && data.gemini_key){
-      localStorage.setItem('gemini_key', data.gemini_key);
-      $('#gkey').value = data.gemini_key;
-    }
-  }catch(e){ console.error('Geminiキーの取得に失敗', e); }
-}
-$('#btn-savekey').onclick = async ()=>{
-  const key = $('#gkey').value.trim();
-  localStorage.setItem('gemini_key', key);
-  const s=$('#gsaved'); s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),1800);
-  if(currentUid){
-    try{ await supa.from('hist_settings').upsert({ user_id: currentUid, gemini_key: key }); }
-    catch(e){ console.error('Geminiキーの保存に失敗（この端末には保存済み）', e); }
-  }
-};
 
 /* ---------- Gemini混雑フォールバックの自動反映状況 ---------- */
 async function loadFallbackStatus(){
@@ -430,22 +407,18 @@ function parseGeminiItems(data){
   return arr;
 }
 async function geminiCall(prompt, responseSchema){
-  const key = getGeminiKey();
-  if(!key) throw new Error('NO_KEY');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`;
-  const gen = { responseMimeType:'application/json', temperature:0.2 };
-  if(responseSchema) gen.responseSchema = responseSchema;   // 返ってくるJSONの形を固定したいとき
-  const body = JSON.stringify({ contents:[{parts:[{text:prompt}]}], generationConfig: gen });
   let lastErr;
   for(let attempt=0; attempt<4; attempt++){
     if(attempt>0){ retryNote('混雑のため再試行中…'); await sleep(900*Math.pow(2,attempt-1)); }
-    let res;
-    try{ res = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body}); }
+    let data, error;
+    try{ ({data,error} = await supa.functions.invoke('history-gemini',{body:{prompt,responseSchema}})); }
     catch(e){ lastErr=e; continue; }
-    if(res.ok) return res;
-    const t = await res.text().catch(()=>'');
-    lastErr = new Error('GEMINI '+res.status+': '+t.slice(0,160));
-    if([429,500,503].includes(res.status)) continue;   // 一時的なものは再試行
+    if(!error) return { json: async()=>data };         // 既存の呼び出し側は Response.json() と同じ形で受ける
+    let detail = error.message || '';
+    const status = error.context?.status;
+    try{ const d = await error.context?.clone().json(); detail = d?.error || detail; }catch(e){}
+    lastErr = new Error('GEMINI '+(status||'接続失敗')+': '+detail.slice(0,160));
+    if([429,500,503].includes(status)) continue;       // 一時的なものは再試行
     throw lastErr;                                       // それ以外は即エラー
   }
   throw lastErr;
@@ -613,8 +586,6 @@ $('#raw').addEventListener('keydown', e=>{
 $('#btn-update').onclick = async ()=>{
   const raw = $('#raw').value.trim();
   if(!raw){ showResult('テキストを貼り付けてください。', true); return; }
-  if(!getGeminiKey()){ showResult('先に「設定」でGemini APIキーを保存してください。', true); return; }
-
   setLoading(true);
   hideResult();
   try{
@@ -691,8 +662,7 @@ $('#btn-update').onclick = async ()=>{
     showUpdateResult(grewList.length, bornList.length, failedNames);
   }catch(err){
     console.error(err);
-    if(err.message==='NO_KEY') showResult('Gemini APIキーが未設定です。「設定」で保存してください。', true);
-    else if(/503|UNAVAILABLE|high demand|overload|429/i.test(err.message||'')) showResult('Geminiが今とても混み合っています。少し時間をおいて、もう一度「更新する」を押してください。（あなたのテキストは消えていません）', true);
+    if(/503|UNAVAILABLE|high demand|overload|429/i.test(err.message||'')) showResult('Geminiが今とても混み合っています。少し時間をおいて、もう一度「更新する」を押してください。（あなたのテキストは消えていません）', true);
     else if(isNetErr(err.message)) showResult('通信に失敗しました。電波の良い場所で、少し待ってからもう一度「更新する」を押してください。（テキストは消えていません）', true);
     else showResult('うまくいきませんでした：'+(err._label?('['+err._label+'] '):'')+(err.message||err), true);
   }
@@ -1178,7 +1148,6 @@ supa.auth.onAuthStateChange((event, session)=>{
     $('#who').textContent = 'ログイン中：'+(session.user.email||'');
     if(session.user.email) localStorage.setItem('last_email', session.user.email);
     if(event==='TOKEN_REFRESHED') return;
-    loadGeminiKeyFromCloud();
     loadReview();
     cleanupOldEntries();
   }else{
@@ -1250,7 +1219,6 @@ async function geocodeBatch(rows){
 }
 $('#btn-geocode').onclick = async ()=>{
   const b=$('#btn-geocode'), st=$('#geo-status');
-  if(!getGeminiKey()){ st.textContent='先に上でGemini APIキーを保存してください。'; return; }
   b.disabled=true; st.textContent='対象を数えています…';
   activeStatusSel = '#geo-status';
   let done=0, notFound=0, apiFailed=0, firstErr='';
@@ -1295,7 +1263,7 @@ $('#btn-geocode').onclick = async ()=>{
     allItems = [];                                    // 次に年表を開くとき読み直す
   }catch(e){
     console.error(e);
-    st.textContent = 'うまくいきませんでした：' + (e.message==='NO_KEY' ? 'Gemini APIキーが未設定です' : (e.message||e));
+    st.textContent = 'うまくいきませんでした：' + (e.message||e);
   }
   activeStatusSel = null;
   b.disabled=false;
