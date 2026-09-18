@@ -1332,14 +1332,9 @@ $('#btn-dupes').onclick = async ()=>{
 };
 async function mergeDuplicateItems(keep, others){
   const otherIds = others.map(o=>o.id);
-  // 積み重なった知識（hist_facts）は消さずに残す項目へ付け替える
-  await dbRetry(()=>supa.from('hist_facts').update({ item_id: keep.id }).in('item_id', otherIds), '情報の付け替え');
-  // 残す項目に無い情報（要約・座標）は、統合される項目から補う
-  const patch = {};
-  if(!keep.summary){ const s = others.find(o=>o.summary); if(s) patch.summary = s.summary; }
-  if(!validCoord(keep.lat,keep.lng)){ const c = others.find(o=>validCoord(o.lat,o.lng)); if(c){ patch.lat=c.lat; patch.lng=c.lng; } }
-  if(Object.keys(patch).length){ await dbRetry(()=>supa.from('hist_items').update(patch).eq('id', keep.id), '項目の補完'); }
-  await dbRetry(()=>supa.from('hist_items').delete().in('id', otherIds), '重複項目の削除');
+  // DB関数内で「情報の補完 → 知識の付け替え → 重複項目の削除」を1トランザクションにする。
+  // 途中の通信断やエラー時に、知識だけが移った中間状態を残さない。
+  await dbRetry(()=>supa.rpc('merge_hist_items',{p_keep_id:keep.id,p_other_ids:otherIds}), '重複項目の統合');
 }
 
 /* ---------- バックアップ書き出し ---------- */
