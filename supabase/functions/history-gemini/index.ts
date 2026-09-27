@@ -26,11 +26,11 @@ Deno.serve(async (req) => {
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) return json({ error: "Unauthorized" }, 401);
 
-  // このアプリは個人用。認証だけでは新規登録者もAIを呼べてしまうため、
-  // RLSで本人の行だけを見たうえで、既存の歴史ログ利用者に限定する。
-  const { data: existingItem, error: accessError } = await supabase
-    .from("hist_items").select("id").limit(1).maybeSingle();
-  if (accessError || !existingItem) return json({ error: "このアカウントには歴史ログの利用権限がありません。" }, 403);
+  // 認証済みでも、項目を1件作るだけでAIを使える状態にはしない。
+  // RLSにより本人の許可行だけ読める専用の許可リストで判定する。
+  const { data: authorization, error: accessError } = await supabase
+    .from("hist_ai_users").select("user_id").limit(1).maybeSingle();
+  if (accessError || !authorization) return json({ error: "このアカウントには歴史ログのAI利用権限がありません。" }, 403);
 
   let payload: { prompt?: unknown; responseSchema?: unknown };
   try { payload = await req.json(); }
