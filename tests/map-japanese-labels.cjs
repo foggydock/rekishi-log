@@ -19,5 +19,11 @@ assert.match(html, /addBaseMapLayer\(leafMap\)/,
   '表示環境に応じた背景地図を追加する');
 assert.match(html, /scrollWheelZoom:false, minZoom:2/,
   '世界中の地点を表示するときも読める縮尺を保つ');
+assert.match(html, /baseLayer\.on\('tileerror', \(\)=>showMapTileRecovery\(leafMap\)\)/,
+  '背景タイルだけの失敗も検知する');
+assert.match(html, /外部地図で開く/,
+  'タイル障害時に登録済み地点を外部地図でも確認できる');
+assert.match(html, /もう一度読み込む/,
+  'タイル障害時に再試行できる');
 
 console.log('PASS: hosted map uses Japanese MapTiler; file preview has a fallback');

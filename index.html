@@ -159,6 +159,9 @@
   /* 背景は海の色。世界全体を映すと地図の上下に余白が出るので、そこが白く抜けないようにする */
   #map{height:58vh;min-height:320px;border-radius:var(--radius);border:1px solid var(--line);background:#aad3df;z-index:1}
   .map-note{font-size:12px;color:var(--muted);margin:8px 2px 0;line-height:1.6}
+  .map-tile-status{display:none;margin-top:8px;padding:9px 10px;border:1px solid #eccabf;border-radius:10px;background:#f7e7e3;color:var(--danger)}
+  .map-tile-status.show{display:block}
+  .map-tile-status button,.map-tile-status a{margin:6px 6px 0 0;padding:5px 8px;border:1px solid currentColor;border-radius:8px;background:var(--surface);color:inherit;font:inherit;font-size:12px;text-decoration:none;cursor:pointer;display:inline-block}
   .map-pin-label{font-size:12px;font-family:inherit}
   .no-coord-h{font-size:13px;color:var(--muted);margin:20px 2px 6px}
 
@@ -944,6 +947,23 @@ function addBaseMapLayer(map){
     language: L.maptiler.Language.JAPANESE
   }).addTo(map);
 }
+function showMapTileRecovery(map){
+  const status = $('#map-tile-status');
+  if(!status || status.classList.contains('show')) return;
+  status.classList.add('show');
+  status.replaceChildren(document.createTextNode('背景地図を読み込めませんでした。通信状況または地図サービスの状態をご確認ください。'));
+  const retry = document.createElement('button');
+  retry.type = 'button'; retry.textContent = 'もう一度読み込む';
+  retry.onclick = ()=>renderTimeline();
+  status.appendChild(retry);
+  const center = map.getCenter();
+  const zoom = map.getZoom();
+  const external = document.createElement('a');
+  external.textContent = '外部地図で開く';
+  external.target = '_blank'; external.rel = 'noopener noreferrer';
+  external.href = `https://www.google.com/maps/@?api=1&map_action=map&center=${encodeURIComponent(center.lat+','+center.lng)}&zoom=${encodeURIComponent(zoom)}`;
+  status.appendChild(external);
+}
 function ensureLeaflet(){
   if(window.L && window.L.maptiler) return Promise.resolve();
   if(window._leafletLoading) return window._leafletLoading;
@@ -999,7 +1019,8 @@ async function renderMapView(list){
   const localFilePreview = location.protocol === 'file:';
   wrap.innerHTML = `<div id="map"></div>
     <div class="map-note">📍 ${withCoord.length}件を表示中。ピンをタップすると項目が開きます。<br>
-    藩や帝国のように広がりのある場所も、代表となる一地点で表しています。${localFilePreview ? '<br>💡 このPCではファイルを直接開いているため、ローカル閲覧対応の日本語地図を表示しています。' : ''}</div>
+    藩や帝国のように広がりのある場所も、代表となる一地点で表しています。${localFilePreview ? '<br>💡 このPCではファイルを直接開いているため、ローカル閲覧対応の日本語地図を表示しています。' : ''}
+    <div id="map-tile-status" class="map-tile-status" role="status" aria-live="polite"></div></div>
     ${without.length ? `<div class="no-coord-h">まだ地図に置けない項目（${without.length}）</div>
       <div class="tl"><div class="tl-group">${without.map(cardHtml).join('')}</div></div>` : ''}`;
   wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
@@ -1007,7 +1028,10 @@ async function renderMapView(list){
   // 全世界に点が散らばるとfitBoundsがズーム1まで下がり、OSMFJの低詳細タイルでは
   // 海だけのように見えてしまう。最低ズームを2にして地図として読める縮尺を保つ。
   leafMap = L.map('map', { scrollWheelZoom:false, minZoom:2 });
-  addBaseMapLayer(leafMap);
+  const baseLayer = addBaseMapLayer(leafMap);
+  // Leaflet本体の読み込み成功後に、タイルだけが403・通信断などで失敗する場合もある。
+  // その場合は青い背景だけを残さず、再試行と外部地図への移動手段を示す。
+  baseLayer.on('tileerror', ()=>showMapTileRecovery(leafMap));
   leafLayer = L.layerGroup().addTo(leafMap);
   const pts = [];
   const markerById = {};
