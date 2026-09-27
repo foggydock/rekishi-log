@@ -927,6 +927,23 @@ function updateMapToggle(){
 // Leaflet と MapTiler は地図を開いたときだけ読み込む（普段のアプリ起動を重くしないため）
 // このキーはブラウザで使う公開キー。MapTiler 側で foggydock.github.io に限定している。
 const MAPTILER_PUBLIC_KEY = 'HYLKUB1s4Tnh0OHvKxOR';
+// 公開用キーは本番URLだけに制限している。file:// には Origin / Referer が無いため、
+// PCでindex.htmlを直接開いた時はキー不要の地図に切り替える。
+function addBaseMapLayer(map){
+  if(location.protocol === 'file:'){
+    return L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+  }
+  // ベクター地図なので、MapTiler SDK が日本語の地名ラベルへ切り替えられる。
+  // MapTiler の日本語データがない地名は、地図データにある表記へフォールバックする。
+  return L.maptiler.maptilerLayer({
+    apiKey: MAPTILER_PUBLIC_KEY,
+    style: L.maptiler.MapStyle.STREETS,
+    language: L.maptiler.Language.JAPANESE
+  }).addTo(map);
+}
 function ensureLeaflet(){
   if(window.L && window.L.maptiler) return Promise.resolve();
   if(window._leafletLoading) return window._leafletLoading;
@@ -979,21 +996,16 @@ async function renderMapView(list){
     return;
   }
   if(gen !== mapGen) return;
+  const localFilePreview = location.protocol === 'file:';
   wrap.innerHTML = `<div id="map"></div>
     <div class="map-note">📍 ${withCoord.length}件を表示中。ピンをタップすると項目が開きます。<br>
-    藩や帝国のように広がりのある場所も、代表となる一地点で表しています。</div>
+    藩や帝国のように広がりのある場所も、代表となる一地点で表しています。${localFilePreview ? '<br>💡 このPCではファイルを直接開いているため、背景地図はローカル閲覧用の表示です。公開サイトでは日本語ラベルの地図が表示されます。' : ''}</div>
     ${without.length ? `<div class="no-coord-h">まだ地図に置けない項目（${without.length}）</div>
       <div class="tl"><div class="tl-group">${without.map(cardHtml).join('')}</div></div>` : ''}`;
   wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
 
   leafMap = L.map('map', { scrollWheelZoom:false });
-  // ベクター地図なので、MapTiler SDK が日本語の地名ラベルへ切り替えられる。
-  // MapTiler の日本語データがない地名は、地図データにある表記へフォールバックする。
-  L.maptiler.maptilerLayer({
-    apiKey: MAPTILER_PUBLIC_KEY,
-    style: L.maptiler.MapStyle.STREETS,
-    language: L.maptiler.Language.JAPANESE
-  }).addTo(leafMap);
+  addBaseMapLayer(leafMap);
   leafLayer = L.layerGroup().addTo(leafMap);
   const pts = [];
   const markerById = {};
