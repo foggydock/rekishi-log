@@ -924,17 +924,34 @@ function updateMapToggle(){
     document.body.classList.remove('map-open');
   }
 }
-// Leafletは地図を開いたときだけ読み込む（普段のアプリ起動を重くしないため）
+// Leaflet と MapTiler は地図を開いたときだけ読み込む（普段のアプリ起動を重くしないため）
+// このキーはブラウザで使う公開キー。MapTiler 側で foggydock.github.io に限定している。
+const MAPTILER_PUBLIC_KEY = 'HYLKUB1s4Tnh0OHvKxOR';
 function ensureLeaflet(){
-  if(window.L) return Promise.resolve();
+  if(window.L && window.L.maptiler) return Promise.resolve();
   if(window._leafletLoading) return window._leafletLoading;
   window._leafletLoading = new Promise((resolve, reject)=>{
     const css = document.createElement('link');
     css.rel='stylesheet'; css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
     document.head.appendChild(css);
+    const maptilerCss = document.createElement('link');
+    maptilerCss.rel='stylesheet'; maptilerCss.href='https://cdn.maptiler.com/maptiler-sdk-js/v4.1.0/maptiler-sdk.css';
+    document.head.appendChild(maptilerCss);
     const js = document.createElement('script');
     js.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-    js.onload = ()=> window.L ? resolve() : reject(new Error('地図ライブラリを読み込めませんでした'));
+    js.onload = ()=>{
+      const sdk = document.createElement('script');
+      sdk.src='https://cdn.maptiler.com/maptiler-sdk-js/v4.1.0/maptiler-sdk.umd.min.js';
+      sdk.onload = ()=>{
+        const plugin = document.createElement('script');
+        plugin.src='https://cdn.maptiler.com/leaflet-maptilersdk/v4.1.0/leaflet-maptilersdk.umd.min.js';
+        plugin.onload = ()=> window.L && window.L.maptiler ? resolve() : reject(new Error('地図ライブラリを読み込めませんでした'));
+        plugin.onerror = ()=>{ window._leafletLoading=null; reject(new Error('地図ライブラリを読み込めませんでした')); };
+        document.head.appendChild(plugin);
+      };
+      sdk.onerror = ()=>{ window._leafletLoading=null; reject(new Error('地図ライブラリを読み込めませんでした')); };
+      document.head.appendChild(sdk);
+    };
     js.onerror = ()=>{ window._leafletLoading=null; reject(new Error('地図ライブラリを読み込めませんでした')); };
     document.head.appendChild(js);
   });
@@ -970,10 +987,12 @@ async function renderMapView(list){
   wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
 
   leafMap = L.map('map', { scrollWheelZoom:false });
-  // 日本語の地名表記を含むOSMFJの世界地図。ラスタタイルは文字も画像化済みのため、
-  // Leaflet側ではなく日本語スタイルのタイルを選ぶ必要がある。
-  L.tileLayer('https://tile.openstreetmap.jp/styles/osm-bright-ja/{z}/{x}/{y}.png', {
-    maxZoom: 18, attribution: '&copy; OpenStreetMap Contributors'
+  // ベクター地図なので、MapTiler SDK が日本語の地名ラベルへ切り替えられる。
+  // MapTiler の日本語データがない地名は、地図データにある表記へフォールバックする。
+  L.maptiler.maptilerLayer({
+    apiKey: MAPTILER_PUBLIC_KEY,
+    style: L.maptiler.MapStyle.STREETS,
+    language: L.maptiler.Language.JAPANESE
   }).addTo(leafMap);
   leafLayer = L.layerGroup().addTo(leafMap);
   const pts = [];
