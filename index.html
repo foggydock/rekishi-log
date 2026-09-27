@@ -1004,7 +1004,9 @@ async function renderMapView(list){
       <div class="tl"><div class="tl-group">${without.map(cardHtml).join('')}</div></div>` : ''}`;
   wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
 
-  leafMap = L.map('map', { scrollWheelZoom:false });
+  // 全世界に点が散らばるとfitBoundsがズーム1まで下がり、OSMFJの低詳細タイルでは
+  // 海だけのように見えてしまう。最低ズームを2にして地図として読める縮尺を保つ。
+  leafMap = L.map('map', { scrollWheelZoom:false, minZoom:2 });
   addBaseMapLayer(leafMap);
   leafLayer = L.layerGroup().addTo(leafMap);
   const pts = [];
