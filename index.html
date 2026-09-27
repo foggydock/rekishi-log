@@ -970,8 +970,10 @@ async function renderMapView(list){
   wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
 
   leafMap = L.map('map', { scrollWheelZoom:false });
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 18, attribution: '&copy; OpenStreetMap contributors'
+  // 日本語の地名表記を含むOSMFJの世界地図。ラスタタイルは文字も画像化済みのため、
+  // Leaflet側ではなく日本語スタイルのタイルを選ぶ必要がある。
+  L.tileLayer('https://tile.openstreetmap.jp/styles/osm-bright-ja/{z}/{x}/{y}.png', {
+    maxZoom: 18, attribution: '&copy; OpenStreetMap Contributors'
   }).addTo(leafMap);
   leafLayer = L.layerGroup().addTo(leafMap);
   const pts = [];
