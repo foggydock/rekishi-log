@@ -13,8 +13,8 @@ assert.match(html, /language: L\.maptiler\.Language\.JAPANESE/,
   '地名ラベルの言語を日本語に指定する');
 assert.match(html, /location\.protocol === 'file:'/,
   'file:// で直接開いた場合を判定する');
-assert.match(html, /https:\/\/\{s\}\.tile\.openstreetmap\.org\/\{z\}\/\{x\}\/\{y\}\.png/,
-  'file:// ではキー制限に影響されない代替地図を使う');
+assert.match(html, /https:\/\/tile\.openstreetmap\.jp\/styles\/osm-bright-ja\/\{z\}\/\{x\}\/\{y\}\.png/,
+  'file:// ではOSMFJの日本語地図を使う');
 assert.match(html, /addBaseMapLayer\(leafMap\)/,
   '表示環境に応じた背景地図を追加する');
 
