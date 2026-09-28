@@ -1230,7 +1230,11 @@ $('#au-signup').onclick = async ()=>{
   authMsg('');
   const email=$('#au-email').value.trim(), pass=$('#au-pass').value;
   if(!email||!pass){ authMsg('メールとパスワードを入れてください'); return; }
-  if(pass.length<6){ authMsg('パスワードは6文字以上にしてください'); return; }
+  if(pass.length<12){ authMsg('パスワードは12文字以上にしてください'); return; }
+  if(!/[a-z]/.test(pass) || !/[A-Z]/.test(pass) || !/[0-9]/.test(pass) || !/[^A-Za-z0-9]/.test(pass)){
+    authMsg('パスワードには英小文字・英大文字・数字・記号をそれぞれ1文字以上入れてください');
+    return;
+  }
   const { data, error } = await supa.auth.signUp({ email, password: pass });
   if(error){ authMsg('登録できませんでした：'+error.message); return; }
   if(data.session) authMsg('登録してログインしました。', true);
