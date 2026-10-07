@@ -663,6 +663,17 @@ $('#btn-update').onclick = async ()=>{
     $('#raw').value='';
     localStorage.removeItem(DRAFT_KEY);
     updateDraftBadge();
+    // 「今回の更新」から新規項目を開いたときにも、年表と同じ番号・関連項目を出せるよう
+    // 一覧キャッシュを更新する。失敗しても保存済みデータを失敗扱いにしない。
+    try{
+      const [freshItems, freshFacts] = await Promise.all([
+        fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true})),
+        fetchAllRows('hist_facts','item_id')
+      ]);
+      applyTimelineData(freshItems, freshFacts);
+    }catch(cacheErr){
+      console.error('更新後の一覧キャッシュ再取得に失敗:', cacheErr);
+    }
     lastUpdate = { grew: grewList, born: bornList };
     showUpdateResult(grewList.length, bornList.length, failedNames);
   }catch(err){
@@ -691,7 +702,7 @@ function showUpdateResult(g,b,failedNames){
 }
 function showUpdateDetail(){
   if(!lastUpdate) return;
-  const sec=(title,arr,mark)=> arr.length? `<div class="layers-h" style="margin-top:14px">${mark} ${title}（${arr.length}）</div><div class="rel-wrap">${arr.map(x=>`<button class="rel-chip" data-rid="${x.id}">${esc(x.name)}</button>`).join('')}</div>`:'';
+  const sec=(title,arr,mark)=> arr.length? `<div class="layers-h" style="margin-top:14px">${mark} ${title}（${arr.length}）</div><div class="rel-wrap">${arr.map(x=>`<button class="rel-chip" data-rid="${x.id}">${itemNameHtml(x)}</button>`).join('')}</div>`:'';
   $('#sheet').innerHTML=`<button class="close" id="u-close">×</button>
     <h2 style="margin-bottom:6px">今回の更新</h2>
     <div class="d-meta">この更新で増えた項目です。タップで開けます。</div>
@@ -722,6 +733,11 @@ function itemNameHtml(item){
   const no = itemNo(item);
   return `${no ? `<span class="item-no">No. ${no}</span>` : ''}${esc(item.name)}`;
 }
+function applyTimelineData(items, facts){
+  allItems = items||[];
+  refreshItemNumbers();
+  factCounts={}; (facts||[]).forEach(f=>factCounts[f.item_id]=(factCounts[f.item_id]||0)+1);
+}
 async function loadTimeline(){
   const wrap=$('#tl-wrap');
   wrap.innerHTML='<div class="empty">読み込み中…</div>';
@@ -730,9 +746,7 @@ async function loadTimeline(){
     items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true}));
     facts = await fetchAllRows('hist_facts','item_id');
   }catch(e){ console.error(e); wrap.innerHTML='<div class="empty">読み込みに失敗しました</div>'; return; }
-  allItems = items||[];
-  refreshItemNumbers();
-  factCounts={}; (facts||[]).forEach(f=>factCounts[f.item_id]=(factCounts[f.item_id]||0)+1);
+  applyTimelineData(items, facts);
   updateFreshToggle(); renderTypeChips(); renderChips(); renderTimeline();
 }
 /* ---------- 今日の振り返り（ランダム復習） ---------- */
@@ -991,18 +1005,28 @@ function ensureLeaflet(){
   window._leafletLoading = new Promise((resolve, reject)=>{
     const css = document.createElement('link');
     css.rel='stylesheet'; css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    css.integrity='sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H';
+    css.crossOrigin='anonymous';
     document.head.appendChild(css);
     const maptilerCss = document.createElement('link');
     maptilerCss.rel='stylesheet'; maptilerCss.href='https://cdn.maptiler.com/maptiler-sdk-js/v4.1.0/maptiler-sdk.css';
+    maptilerCss.integrity='sha384-Vz4C0AQAi1+hhcGUj+oegEBOzHJd2CQ0u8GwrVRW6FiTkHMpgTx391mcJOpQsH2A';
+    maptilerCss.crossOrigin='anonymous';
     document.head.appendChild(maptilerCss);
     const js = document.createElement('script');
     js.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.integrity='sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH';
+    js.crossOrigin='anonymous';
     js.onload = ()=>{
       const sdk = document.createElement('script');
       sdk.src='https://cdn.maptiler.com/maptiler-sdk-js/v4.1.0/maptiler-sdk.umd.min.js';
+      sdk.integrity='sha384-ju31sbAtr1aMgAuTfEtzfKJASrfNJ38iLa6opxSDfQdIeF08JMF52zXiwwaVkO3g';
+      sdk.crossOrigin='anonymous';
       sdk.onload = ()=>{
         const plugin = document.createElement('script');
         plugin.src='https://cdn.maptiler.com/leaflet-maptilersdk/v4.1.0/leaflet-maptilersdk.umd.min.js';
+        plugin.integrity='sha384-kjp3NY9oKr45pOPGXMgEv90cpaj6s19E6cq08zcixNR8wMNFM/iaOh62PfCUjYfF';
+        plugin.crossOrigin='anonymous';
         plugin.onload = ()=> window.L && window.L.maptiler ? resolve() : reject(new Error('地図ライブラリを読み込めませんでした'));
         plugin.onerror = ()=>{ window._leafletLoading=null; reject(new Error('地図ライブラリを読み込めませんでした')); };
         document.head.appendChild(plugin);

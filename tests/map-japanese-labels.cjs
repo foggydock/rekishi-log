@@ -7,6 +7,20 @@ assert.match(html, /const MAPTILER_PUBLIC_KEY = '[A-Za-z0-9]+'/,
   'MapTiler の公開キーを利用する');
 assert.match(html, /cdn\.maptiler\.com\/leaflet-maptilersdk\/v4\.1\.0\/leaflet-maptilersdk\.umd\.min\.js/,
   'MapTiler の Leaflet 用SDKを読み込む');
+for(const url of [
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  'https://cdn.maptiler.com/maptiler-sdk-js/v4.1.0/maptiler-sdk.css',
+  'https://cdn.maptiler.com/maptiler-sdk-js/v4.1.0/maptiler-sdk.umd.min.js',
+  'https://cdn.maptiler.com/leaflet-maptilersdk/v4.1.0/leaflet-maptilersdk.umd.min.js'
+]){
+  const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  assert.match(html, new RegExp(`src='${escaped}'|href='${escaped}'`), `${url} のURLを固定する`);
+}
+assert.equal((html.match(/\.integrity='sha384-[A-Za-z0-9+/]+={0,2}'/g)||[]).length, 5,
+  '動的に読む地図リソースすべてにSRIハッシュを設定する');
+assert.equal((html.match(/\.crossOrigin='anonymous'/g)||[]).length >= 5, true,
+  '動的に読む地図リソースは匿名CORSでSRIを検証する');
 assert.match(html, /style: L\.maptiler\.MapStyle\.STREETS/,
   'MapTiler の標準地図を利用する');
 assert.match(html, /language: L\.maptiler\.Language\.JAPANESE/,
