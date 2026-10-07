@@ -15,7 +15,7 @@ async function run({confirm=true,fetchError=false,error=null,data=[{id:'a'}],bac
     downloadBackupMd:(items,facts)=>{assert.equal(facts.length,1);backups++;return backup},
     supa:{from:()=>({delete:()=>{deletes++;return query}})},
     allItems:[{id:'a'},{id:'b'}],factCounts:{a:1,b:2},lastUpdate:{born:[{id:'a'}],grew:[]},
-    closeDetail(){},pickReview(){picks++},updateFreshToggle(){},renderTypeChips(){},renderChips(){},renderTimeline(){}
+    closeDetail(){},pickReview(){picks++},refreshItemNumbers(){},updateFreshToggle(){},renderTypeChips(){},renderChips(){},renderTimeline(){}
   });
   vm.runInContext(code,ctx);
   await ctx.deleteItem({id:'a',name:'項目'},btn);
@@ -32,7 +32,7 @@ async function run({confirm=true,fetchError=false,error=null,data=[{id:'a'}],bac
   const pickCode=html.slice(html.indexOf('function pickReview(){'),html.indexOf('function goToMapFor(item)'));
   const wrap={style:{},innerHTML:'',querySelectorAll:()=>[]};
   const elements={};
-  const ctx=vm.createContext({$:s=>s==='#review'?wrap:(elements[s]??={}),allItems:[],esc:x=>x,typeClass:()=>'',validCoord:()=>false,markReviewed(){},openDetail(){},deleteItem(){}});
+  const ctx=vm.createContext({$:s=>s==='#review'?wrap:(elements[s]??={}),allItems:[],esc:x=>x,itemNameHtml:i=>i.name,typeClass:()=>'',validCoord:()=>false,markReviewed(){},openDetail(){},deleteItem(){}});
   vm.runInContext(pickCode,ctx);ctx.pickReview();assert.equal(wrap.style.display,'none');
   ctx.allItems=[{id:'b',name:'残る項目'}];ctx.pickReview();assert.match(wrap.innerHTML,/rev-delete/);assert.match(wrap.innerHTML,/残る項目/);assert.equal(typeof elements['#rev-delete'].onclick,'function');
   console.log('PASS: syntax, delete success, cancellation, backup read failure, API failure, zero rows, cache cleanup, empty review and delete button');

@@ -10,8 +10,8 @@ function setup({error=null,empty=false}={}){
   const calls=[];let alerts=0;
   const ctx=vm.createContext({
     $:s=>s==='#review'?wrap:(elements[s]??={id:s.slice(1),textContent:'今後の振り返りに出さない'}),
-    allItems:rows.map(r=>({...r})),currentUid:'owner',esc:x=>x,typeClass:()=>'',validCoord:()=>false,
-    console:{error(){}},alert:()=>alerts++,markReviewed(){},openDetail(){},deleteItem(){},
+    allItems:rows.map(r=>({...r})),currentUid:'owner',esc:x=>x,itemNameHtml:i=>i.name,typeClass:()=>'',validCoord:()=>false,
+    console:{error(){}},alert:()=>alerts++,refreshItemNumbers(){},markReviewed(){},openDetail(){},deleteItem(){},
     fetchAllRows:async()=>rows.map(r=>({...r})),
     supa:{from:table=>({update:patch=>{
       const filters={}; const q={eq(k,v){filters[k]=v;return q},async select(){
