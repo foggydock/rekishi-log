@@ -962,7 +962,9 @@ function updateMapToggle(){
     document.body.classList.remove('map-open');
   }
 }
-// Leaflet と MapTiler は地図を開いたときだけ読み込む（普段のアプリ起動を重くしないため）
+// Leaflet と MapTiler は地図を開いたときだけ読み込む（普段のアプリ起動を重くしないため）。
+// 版を更新する場合は、各固定URLの内容から SHA-384 を再計算して integrity も更新し、
+// tests/map-resource-integrity.cjs で URL とハッシュの組み合わせを確認する。
 // このキーはブラウザで使う公開キー。MapTiler 側で foggydock.github.io に限定している。
 const MAPTILER_PUBLIC_KEY = 'HYLKUB1s4Tnh0OHvKxOR';
 // 公開用キーは本番URLだけに制限している。file:// には Origin / Referer が無いため、
