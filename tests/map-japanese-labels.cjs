@@ -17,10 +17,12 @@ for(const url of [
   const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   assert.match(html, new RegExp(`src='${escaped}'|href='${escaped}'`), `${url} のURLを固定する`);
 }
-assert.equal((html.match(/\.integrity='sha384-[A-Za-z0-9+/]+={0,2}'/g)||[]).length, 5,
-  '動的に読む地図リソースすべてにSRIハッシュを設定する');
-assert.equal((html.match(/\.crossOrigin='anonymous'/g)||[]).length >= 5, true,
-  '動的に読む地図リソースは匿名CORSでSRIを検証する');
+assert.equal((html.match(/\.integrity='sha384-[A-Za-z0-9+/]+={0,2}'/g)||[]).length, 2,
+  '匿名CORSに対応するLeafletだけにSRIハッシュを設定する');
+assert.equal((html.match(/\.crossOrigin='anonymous'/g)||[]).length >= 2, true,
+  'Leafletは匿名CORSでSRIを検証する');
+assert.match(html, /MapTiler は匿名CORSを返さないため、SRIを付けるとブラウザが読み込みを遮断する。/,
+  'MapTilerのCORS制約を明記する');
 assert.match(html, /style: L\.maptiler\.MapStyle\.STREETS/,
   'MapTiler の標準地図を利用する');
 assert.match(html, /language: L\.maptiler\.Language\.JAPANESE/,

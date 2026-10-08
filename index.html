@@ -234,7 +234,7 @@
     <div class="label">今日聴いたこと（文字起こしを貼り付け）</div>
     <textarea id="raw" placeholder="ポッドキャストの文字起こしや、聴いた内容のメモを貼り付けてください…"></textarea>
     <button class="primary" id="btn-update"><span id="btn-label">更新する</span></button>
-    <div class="hint" style="margin-top:6px">⌘/Ctrl + Enter でも更新できます　<a href="#" id="btn-copy-draft" style="color:inherit;text-decoration:underline">コピー</a>　<a href="#" id="btn-clear-draft" style="color:inherit;text-decoration:underline">クリア</a></div>
+    <div class="hint" style="margin-top:6px">⌘/Ctrl + Enter でも更新できます　<a href="#" id="btn-paste-draft" style="color:inherit;text-decoration:underline">貼り付け</a>　<a href="#" id="btn-copy-draft" style="color:inherit;text-decoration:underline">コピー</a>　<a href="#" id="btn-clear-draft" style="color:inherit;text-decoration:underline">クリア</a></div>
     <div class="result" id="result"></div>
     <div id="review" style="display:none"></div>
   </section>
@@ -559,6 +559,30 @@ $('#btn-clear-draft').onclick = (e)=>{
   localStorage.removeItem(DRAFT_KEY);
   updateDraftBadge();
   hideResult();
+};
+$('#btn-paste-draft').onclick = async (e)=>{
+  e.preventDefault();
+  const raw = $('#raw');
+  const el = $('#btn-paste-draft');
+  const orig = el.textContent;
+  try{
+    if(!navigator.clipboard?.readText) throw new Error('clipboard-read-unavailable');
+    const text = await navigator.clipboard.readText();
+    if(!text){
+      el.textContent = 'コピーされた文字が見つかりません';
+    }else if(raw.value && raw.value !== text && !confirm('入力中の文章をコピーした内容で置き換えますか？')){
+      el.textContent = '貼り付けを取りやめました';
+    }else{
+      raw.value = text;
+      raw.dispatchEvent(new Event('input', {bubbles:true}));
+      raw.focus();
+      el.textContent = '貼り付けました';
+    }
+  }catch(err){
+    raw.focus();
+    el.textContent = '入力欄を長押し／右クリックして貼り付けてください';
+  }
+  setTimeout(()=>{ el.textContent = orig; }, 3000);
 };
 $('#btn-copy-draft').onclick = async (e)=>{
   e.preventDefault();
@@ -963,8 +987,9 @@ function updateMapToggle(){
   }
 }
 // Leaflet と MapTiler は地図を開いたときだけ読み込む（普段のアプリ起動を重くしないため）。
-// 版を更新する場合は、各固定URLの内容から SHA-384 を再計算して integrity も更新し、
-// tests/map-resource-integrity.cjs で URL とハッシュの組み合わせを確認する。
+// Leaflet は配信元が匿名CORSに対応しているため、版を更新する場合は SHA-384 も更新する。
+// MapTiler は匿名CORSを返さないため、SRIを付けるとブラウザが読み込みを遮断する。
+// その代わりURLの版を固定し、tests/map-resource-integrity.cjs で確認する。
 // このキーはブラウザで使う公開キー。MapTiler 側で foggydock.github.io に限定している。
 const MAPTILER_PUBLIC_KEY = 'HYLKUB1s4Tnh0OHvKxOR';
 // 公開用キーは本番URLだけに制限している。file:// には Origin / Referer が無いため、
@@ -1012,8 +1037,6 @@ function ensureLeaflet(){
     document.head.appendChild(css);
     const maptilerCss = document.createElement('link');
     maptilerCss.rel='stylesheet'; maptilerCss.href='https://cdn.maptiler.com/maptiler-sdk-js/v4.1.0/maptiler-sdk.css';
-    maptilerCss.integrity='sha384-Vz4C0AQAi1+hhcGUj+oegEBOzHJd2CQ0u8GwrVRW6FiTkHMpgTx391mcJOpQsH2A';
-    maptilerCss.crossOrigin='anonymous';
     document.head.appendChild(maptilerCss);
     const js = document.createElement('script');
     js.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
@@ -1022,13 +1045,9 @@ function ensureLeaflet(){
     js.onload = ()=>{
       const sdk = document.createElement('script');
       sdk.src='https://cdn.maptiler.com/maptiler-sdk-js/v4.1.0/maptiler-sdk.umd.min.js';
-      sdk.integrity='sha384-ju31sbAtr1aMgAuTfEtzfKJASrfNJ38iLa6opxSDfQdIeF08JMF52zXiwwaVkO3g';
-      sdk.crossOrigin='anonymous';
       sdk.onload = ()=>{
         const plugin = document.createElement('script');
         plugin.src='https://cdn.maptiler.com/leaflet-maptilersdk/v4.1.0/leaflet-maptilersdk.umd.min.js';
-        plugin.integrity='sha384-kjp3NY9oKr45pOPGXMgEv90cpaj6s19E6cq08zcixNR8wMNFM/iaOh62PfCUjYfF';
-        plugin.crossOrigin='anonymous';
         plugin.onload = ()=> window.L && window.L.maptiler ? resolve() : reject(new Error('地図ライブラリを読み込めませんでした'));
         plugin.onerror = ()=>{ window._leafletLoading=null; reject(new Error('地図ライブラリを読み込めませんでした')); };
         document.head.appendChild(plugin);
