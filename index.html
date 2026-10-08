@@ -126,6 +126,11 @@
   .sheet h2{font-size:21px;margin:4px 0 2px}
   .sheet .d-meta{font-size:13px;color:var(--muted);margin-bottom:14px}
   .summary{background:var(--accent-soft);border-radius:12px;padding:13px 14px;font-size:15px;margin-bottom:18px}
+  .portrait{margin:0 0 18px;padding:13px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+  .portrait img{display:block;width:100%;max-height:260px;object-fit:contain;border-radius:9px;background:#f1efe8}
+  .portrait-credit{margin-top:8px;font-size:12px;color:var(--muted)}
+  .portrait-source{display:inline-block;margin-top:8px;color:var(--accent);font-size:13px;font-weight:600;text-decoration:none}
+  .portrait-source:hover{text-decoration:underline}
   .layers-h{font-size:13px;color:var(--muted);margin-bottom:10px}
   .layer{border-left:2px solid var(--line);padding:0 0 14px 14px;position:relative}
   .layer::before{content:"";position:absolute;left:-5px;top:6px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
@@ -311,6 +316,24 @@ const supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = s => document.querySelector(s);
 const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const norm = s => (s||'').trim();
+function safeHttpUrl(value){
+  try{
+    const url = new URL(norm(value));
+    return /^https?:$/.test(url.protocol) ? url.href : '';
+  }catch(_e){ return ''; }
+}
+function isDirectImageUrl(value){
+  const url=safeHttpUrl(value);
+  if(!url) return false;
+  try{
+    // Commons の File ページなどは、末尾が .jpg でも画像そのものではない。
+    if(new URL(url).pathname.startsWith('/wiki/')) return false;
+  }catch(_e){ return false; }
+  return /\.(?:avif|gif|jpe?g|png|webp)(?:[?#]|$)/i.test(url);
+}
+function commonsSearchUrl(name){
+  return `https://commons.wikimedia.org/w/index.php?title=Special:MediaSearch&type=image&search=${encodeURIComponent(name)}`;
+}
 // 重複さがし用の緩いキー。全角/半角・中点や長音符などの表記ゆれを吸収する。
 // DBのユニーク制約は完全一致しか防げないため、これがないと「重複しそうな項目をさがす」が
 // 事実上何も見つけられなかった（例:「COTEN RADIO」と「COTENRADIO」、「オーデル川」と「オデル川」）
@@ -448,7 +471,7 @@ async function fetchAllRows(table, columns, applyOrder){
 }
 async function fetchAllItems(){
   // 更新時に既存値を守れるよう、上書き対象になりうる列は全部取得しておく
-  return fetchAllRows('hist_items', 'id,name,summary,lat,lng,type,sort_year,era_label,region,theme');
+  return fetchAllRows('hist_items', 'id,name,summary,lat,lng,type,sort_year,era_label,region,theme,portrait_image_url,portrait_source_url,portrait_credit,portrait_license');
 }
 // AIが返した緯度経度を検証する。数値でなかったり範囲外なら null（＝不明）にする
 function validCoord(lat, lng){
@@ -667,6 +690,11 @@ $('#btn-update').onclick = async ()=>{
           region: it.region || ex?.region || '',
           theme: it.theme || ex?.theme || '',
           lat: co? co.lat : (ex?.lat ?? null), lng: co? co.lng : (ex?.lng ?? null),
+          // AIの抽出・更新では、確認して登録した肖像の出典情報を上書きしない。
+          portrait_image_url: ex?.portrait_image_url ?? null,
+          portrait_source_url: ex?.portrait_source_url ?? null,
+          portrait_credit: ex?.portrait_credit ?? null,
+          portrait_license: ex?.portrait_license ?? null,
           // AIが要約を返さなかった場合は既存の要約を消さずに残す
           summary: it.updated_summary||it.new_fact||ex?.summary||'', user_id: currentUid
         };
@@ -1159,12 +1187,21 @@ async function openDetail(id){
       <div class="fact">${esc(f.fact_text)}</div>
     </div>`).join('') || '<div class="empty" style="padding:20px">情報がまだありません</div>';
   const meta = [item.era_label, item.region, item.theme].filter(Boolean).join(' ・ ');
+  const portraitImageUrl = safeHttpUrl(item.portrait_image_url);
+  const portraitSourceUrl = safeHttpUrl(item.portrait_source_url);
+  const portraitHtml = item.type==='人物' && (portraitImageUrl || portraitSourceUrl) ? `
+    <div class="portrait">
+      ${isDirectImageUrl(portraitImageUrl) ? `<img src="${esc(portraitImageUrl)}" alt="${esc(item.name)}の肖像" loading="lazy" onerror="this.remove()">` : ''}
+      ${(item.portrait_credit || item.portrait_license) ? `<div class="portrait-credit">${esc([item.portrait_credit,item.portrait_license].filter(Boolean).join(' ／ '))}</div>` : ''}
+      ${portraitSourceUrl ? `<a class="portrait-source" href="${esc(portraitSourceUrl)}" target="_blank" rel="noopener noreferrer">↗ 肖像の掲載元・ライセンスを開く</a>` : ''}
+    </div>` : '';
   $('#sheet').innerHTML = `
     <button class="close" id="d-close">×</button>
     <div class="tag ${typeClass(item.type)}">${esc(item.type||'その他')}</div>
     <h2>${itemNameHtml(item)}</h2>
     <div class="d-meta">${esc(meta)}</div>
     ${item.summary?`<div class="summary">${esc(item.summary)}</div>`:''}
+    ${portraitHtml}
     <div class="layers-h">積み重なった知識</div>
     ${layers}
     ${relatedHtml}
@@ -1234,6 +1271,11 @@ function openEdit(item){
     <div class="ef"><label>並べ替え用の年（西暦の数字・紀元前はマイナス）</label><input id="e-year" type="number" value="${item.sort_year??''}"></div>
     <div class="ef"><label>緯度（地図用・例 35.68／空欄なら地図に出ません）</label><input id="e-lat" type="number" step="any" value="${item.lat??''}"></div>
     <div class="ef"><label>経度（地図用・例 139.77）</label><input id="e-lng" type="number" step="any" value="${item.lng??''}"></div>
+    <div class="ef"><label>肖像の画像URL（肖像画・写真・石像など）</label><input id="e-portrait-image" type="url" inputmode="url" placeholder="https://…（画像そのもののURL）" value="${esc(item.portrait_image_url||'')}"></div>
+    <div class="ef"><label>肖像の掲載元URL（必須推奨）</label><input id="e-portrait-source" type="url" inputmode="url" placeholder="https://…（Wikimedia Commonsや所蔵館のページ）" value="${esc(item.portrait_source_url||'')}"></div>
+    <div class="ef"><label>作者・所蔵先などのクレジット</label><input id="e-portrait-credit" value="${esc(item.portrait_credit||'')}"></div>
+    <div class="ef"><label>ライセンス（例: Public domain、CC BY-SA 4.0）</label><input id="e-portrait-license" value="${esc(item.portrait_license||'')}"></div>
+    <div class="hint">画像は掲載元とライセンスを確認してから登録してください。<a href="${esc(commonsSearchUrl(item.name))}" target="_blank" rel="noopener noreferrer">Wikimedia Commonsで候補を探す</a></div>
     <button class="primary" id="e-save" style="margin-top:8px">保存する</button>
     <button class="edit-btn" id="e-back">もどる</button>`;
   $('#e-close').onclick=closeDetail;
@@ -1246,10 +1288,17 @@ function openEdit(item){
     if((latv==='') !== (lngv==='')){ alert('緯度と経度は両方入れるか、両方空にしてください。'); return; }
     const co = latv===''? null : validCoord(latv, lngv);
     if(latv!=='' && !co){ alert('緯度は-90〜90、経度は-180〜180の数字で入れてください。'); return; }
+    const portraitImageUrl=norm($('#e-portrait-image').value);
+    const portraitSourceUrl=norm($('#e-portrait-source').value);
+    if(portraitImageUrl && !safeHttpUrl(portraitImageUrl)){ alert('肖像の画像URLは http:// または https:// で始まるものを入れてください。'); return; }
+    if(portraitSourceUrl && !safeHttpUrl(portraitSourceUrl)){ alert('肖像の掲載元URLは http:// または https:// で始まるものを入れてください。'); return; }
     const { error } = await supa.from('hist_items').update({
       name, type:$('#e-type').value, theme:$('#e-theme').value.trim(),
       region:$('#e-region').value.trim(), era_label:$('#e-era').value.trim(),
       lat: co? co.lat : null, lng: co? co.lng : null,
+      portrait_image_url: portraitImageUrl || null, portrait_source_url: portraitSourceUrl || null,
+      portrait_credit: norm($('#e-portrait-credit').value) || null,
+      portrait_license: norm($('#e-portrait-license').value) || null,
       sort_year: yv===''? null : Math.round(Number(yv)), updated_at:new Date().toISOString()
     }).eq('id', item.id);
     if(error){
