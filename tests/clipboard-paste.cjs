@@ -9,5 +9,8 @@ assert.match(html, /raw\.dispatchEvent\(new Event\('input', \{bubbles:true\}\)\)
   '貼り付けた文章も下書きとして保存する');
 assert.match(html, /入力欄を長押し／右クリックして貼り付けてください/,
   'クリップボードを読めない端末では手動操作を案内する');
+assert.match(html, /id="draft-status"/, '下書き保存中の案内欄がある');
+assert.match(html, /この端末に下書きを保存中です。不要なら「クリア」で消せます。/,
+  '下書きを消す方法を案内する');
 
 console.log('PASS: copied text can be pasted into the draft with a safe fallback');

@@ -235,6 +235,7 @@
     <textarea id="raw" placeholder="ポッドキャストの文字起こしや、聴いた内容のメモを貼り付けてください…"></textarea>
     <button class="primary" id="btn-update"><span id="btn-label">更新する</span></button>
     <div class="hint" style="margin-top:6px">⌘/Ctrl + Enter でも更新できます　<a href="#" id="btn-paste-draft" style="color:inherit;text-decoration:underline">貼り付け</a>　<a href="#" id="btn-copy-draft" style="color:inherit;text-decoration:underline">コピー</a>　<a href="#" id="btn-clear-draft" style="color:inherit;text-decoration:underline">クリア</a></div>
+    <div class="hint" id="draft-status" role="status" aria-live="polite"></div>
     <div class="result" id="result"></div>
     <div id="review" style="display:none"></div>
   </section>
@@ -269,6 +270,7 @@
     <div class="field">
       <div class="hint">これまでの全データをMarkdownファイルで書き出せます（バックアップ・読み返し用）。</div>
       <button class="edit-btn" id="btn-export" style="margin-top:0">全データを書き出す</button>
+      <div class="hint" id="export-status" role="status" aria-live="polite" style="margin-top:8px"></div>
     </div>
     <div class="field">
       <div class="hint">同じ名前の項目が複数できてしまった場合に見つけて1つにまとめられます（積み重なった知識は残したまま統合します）。</div>
@@ -545,7 +547,9 @@ const DRAFT_KEY = 'raw_draft';
 $('#raw').value = localStorage.getItem(DRAFT_KEY) || '';
 // 記録タブ以外にいる間も、下書きが残っていることに気づけるようタブにバッジを出す
 function updateDraftBadge(){
-  $('#draft-dot').style.display = localStorage.getItem(DRAFT_KEY) ? 'block' : 'none';
+  const hasDraft = !!localStorage.getItem(DRAFT_KEY);
+  $('#draft-dot').style.display = hasDraft ? 'block' : 'none';
+  $('#draft-status').textContent = hasDraft ? 'この端末に下書きを保存中です。不要なら「クリア」で消せます。' : '';
 }
 updateDraftBadge();
 $('#raw').addEventListener('input', ()=>{
@@ -1468,9 +1472,15 @@ async function mergeDuplicateItems(keep, others){
 }
 
 /* ---------- バックアップ書き出し ---------- */
-function buildBackupMd(items, facts){
+function exportFileDate(now=new Date()){
+  return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+}
+function buildBackupMd(items, facts, createdAt=new Date()){
   const byItem={}; (facts||[]).forEach(f=>{(byItem[f.item_id]=byItem[f.item_id]||[]).push(f);});
-  let md = `# 歴史ログ バックアップ\n\n書き出し日: ${new Date().toLocaleDateString('ja-JP')}\n全${(items||[]).length}項目\n\n`;
+  const itemCount = (items||[]).length;
+  const factCount = (facts||[]).length;
+  const when = createdAt.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',dateStyle:'long',timeStyle:'short'});
+  let md = `# 歴史ログ バックアップ\n\n- 作成日時（日本時間）: ${when}\n- 項目数: ${itemCount}\n- 知識数: ${factCount}\n- 形式: Markdown（.md）\n\n`;
   (items||[]).forEach(it=>{
     md += `## ${it.name}\n\n`;
     const meta=[it.type,it.era_label,it.region,it.theme].filter(Boolean).join(' / ');
@@ -1486,21 +1496,29 @@ function buildBackupMd(items, facts){
 // エラーを出さずに黙って失敗することがあるため、あくまでベストエフォートの確認）
 function downloadBackupMd(items, facts, filenameStub){
   try{
-    const md = buildBackupMd(items, facts);
+    const now = new Date();
+    const md = buildBackupMd(items, facts, now);
     const blob = new Blob([md],{type:'text/markdown;charset=utf-8'});
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
-    a.href=url; a.download=`歴史ログ_${filenameStub}_${new Date().toISOString().slice(0,10)}.md`;
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    return true;
+    const filename=`歴史ログ_${filenameStub}_${exportFileDate(now)}.md`;
+    a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),0);
+    return {filename,itemCount:(items||[]).length,factCount:(facts||[]).length};
   }catch(e){ console.error('バックアップの書き出しに失敗:', e); return false; }
 }
 $('#btn-export').onclick = async ()=>{
   const b=$('#btn-export'); b.disabled=true; b.textContent='書き出し中…';
+  const status=$('#export-status'); status.textContent='バックアップを準備しています…';
   try{
     const items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true}));
     const facts = await fetchAllRows('hist_facts','*',q=>q.order('added_date',{ascending:true}));
-    downloadBackupMd(items, facts, '全データ');
-  }catch(e){ alert('書き出しに失敗しました：'+(e.message||e)); }
+    const saved = downloadBackupMd(items, facts, '全データ');
+    if(!saved) throw new Error('ダウンロードを開始できませんでした。');
+    status.textContent = `ダウンロードを開始しました（${saved.filename}、${saved.itemCount}項目・${saved.factCount}件）。ブラウザの「ダウンロード」から開き、先頭の件数を確認してください。`;
+  }catch(e){
+    status.textContent='書き出しに失敗しました。通信状況を確認して、もう一度お試しください。';
+    alert('書き出しに失敗しました：'+(e.message||e));
+  }
   b.disabled=false; b.textContent='全データを書き出す';
 };
 </script>
