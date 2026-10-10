@@ -302,8 +302,8 @@
 </nav>
 
 <!-- 項目詳細 -->
-<div class="overlay" id="overlay">
-  <div class="sheet" id="sheet"></div>
+<div class="overlay" id="overlay" aria-hidden="true">
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1"></div>
 </div>
 
 <!-- 版を固定し integrity で改ざんを検知する（版を上げるときは integrity も計算し直す） -->
@@ -760,17 +760,19 @@ function showUpdateDetail(){
   if(!lastUpdate) return;
   const sec=(title,arr,mark)=> arr.length? `<div class="layers-h" style="margin-top:14px">${mark} ${title}（${arr.length}）</div><div class="rel-wrap">${arr.map(x=>`<button class="rel-chip" data-rid="${x.id}">${itemNameHtml(x)}</button>`).join('')}</div>`:'';
   $('#sheet').innerHTML=`<button class="close" id="u-close">×</button>
-    <h2 style="margin-bottom:6px">今回の更新</h2>
+    <h2 id="sheet-title" style="margin-bottom:6px">今回の更新</h2>
     <div class="d-meta">この更新で増えた項目です。タップで開けます。</div>
     ${sec('新しく生まれた', lastUpdate.born, '🌱')}
     ${sec('育った（情報が増えた）', lastUpdate.grew, '📈')}`;
   $('#u-close').onclick=closeDetail;
   $('#sheet').querySelectorAll('.rel-chip').forEach(c=>c.onclick=()=>openDetail(c.dataset.rid));
-  $('#overlay').classList.add('show');
+  showDetail();
 }
 
 /* ---------- 年表 ---------- */
 let allItems=[], factCounts={};
+// 振り返りと年表で同じ利用者の項目一覧を再利用する。利用者が変われば必ず取り直す。
+let itemCacheOwnerId = null;
 let itemNumbers = new Map();
 // No. は登録時に確定する。検索・種類・テーマ・年表上の並び替えや削除では変えない。
 function refreshItemNumbers(){
@@ -787,6 +789,7 @@ function itemNameHtml(item){
 }
 function applyTimelineData(items, facts){
   allItems = items||[];
+  itemCacheOwnerId = typeof currentUid==='string' ? currentUid : null;
   refreshItemNumbers();
   factCounts={}; (facts||[]).forEach(f=>factCounts[f.item_id]=(factCounts[f.item_id]||0)+1);
 }
@@ -803,9 +806,13 @@ async function loadTimeline(){
 }
 /* ---------- 今日の振り返り（ランダム復習） ---------- */
 async function loadReview(){
+  // 年表を開いた直後は同じ一覧を持っているので、もう一度全件取得しない。
+  // 別の利用者でログインした場合は、この条件に当たらず必ず新しく取得する。
+  if(itemCacheOwnerId===currentUid){ pickReview(); return; }
   try{
     // 別端末で変更した振り返り設定も、記録タブを開いたときに反映する。
     allItems = await fetchAllRows('hist_items','*');
+    itemCacheOwnerId = currentUid;
     refreshItemNumbers();
     pickReview();
   }catch(e){
@@ -1194,7 +1201,7 @@ async function openDetail(id){
   $('#sheet').innerHTML = `
     <button class="close" id="d-close">×</button>
     <div class="tag ${typeClass(item.type)}">${esc(item.type||'その他')}</div>
-    <h2>${itemNameHtml(item)}</h2>
+    <h2 id="sheet-title">${itemNameHtml(item)}</h2>
     <div class="d-meta">${esc(meta)}</div>
     ${item.summary?`<div class="summary">${esc(item.summary)}</div>`:''}
     ${portraitHtml}
@@ -1212,7 +1219,7 @@ async function openDetail(id){
   $('#d-edit').onclick=()=>openEdit(item);
   $('#d-review').onclick=()=>setReviewExcluded(item, !item.review_excluded, $('#d-review'));
   $('#d-del').onclick=()=>deleteItem(item, $('#d-del'));
-  $('#overlay').classList.add('show');
+  showDetail();
 }
 let deletingItem = false;
 async function deleteItem(item, btn){
@@ -1258,7 +1265,7 @@ function openEdit(item){
   const types=['人物','出来事','テーマ','地域','その他'];
   $('#sheet').innerHTML = `
     <button class="close" id="e-close">×</button>
-    <h2 style="margin-bottom:14px">項目を編集</h2>
+    <h2 id="sheet-title" style="margin-bottom:14px">項目を編集</h2>
     <div class="ef"><label>名前</label><input id="e-name" value="${esc(item.name)}"></div>
     <div class="ef"><label>種類</label><select id="e-type">${types.map(t=>`<option ${t===(item.type||'その他')?'selected':''}>${t}</option>`).join('')}</select></div>
     <div class="ef"><label>テーマ（例: ローマ史、戦国）</label><input id="e-theme" value="${esc(item.theme||'')}"></div>
@@ -1305,8 +1312,32 @@ function openEdit(item){
     closeDetail(); await loadTimeline();
   };
 }
-function closeDetail(){ $('#overlay').classList.remove('show'); }
+let detailReturnFocus = null;
+function showDetail(){
+  const overlay = $('#overlay');
+  // 詳細から編集へ移る場合は、最初に開いた位置を保ったままにする。
+  if(!overlay.classList.contains('show')) detailReturnFocus = document.activeElement;
+  overlay.classList.add('show');
+  overlay.setAttribute('aria-hidden','false');
+  const close = $('#sheet').querySelector('.close');
+  if(close) close.focus();
+}
+function closeDetail(){
+  const overlay = $('#overlay');
+  if(!overlay.classList.contains('show')) return;
+  overlay.classList.remove('show');
+  overlay.setAttribute('aria-hidden','true');
+  const returnFocus = detailReturnFocus;
+  detailReturnFocus = null;
+  if(returnFocus && returnFocus.isConnected && typeof returnFocus.focus==='function') returnFocus.focus();
+}
 $('#overlay').onclick=e=>{ if(e.target===$('#overlay')) closeDetail(); };
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape' && $('#overlay').classList.contains('show')){
+    e.preventDefault();
+    closeDetail();
+  }
+});
 function fmtDate(s){ const d=new Date(s); return `${d.getMonth()+1}月${d.getDate()}日`; }
 
 /* ---------- 認証（ログイン制） ---------- */
