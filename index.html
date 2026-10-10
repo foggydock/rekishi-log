@@ -772,16 +772,12 @@ function showUpdateDetail(){
 /* ---------- 年表 ---------- */
 let allItems=[], factCounts={};
 let itemNumbers = new Map();
-// 表示番号は、検索・種類・テーマ・年表上の並び替えでは変えない。
-// 有識者ログと同様に、全登録項目を登録日時の新しい順で並べた位置を No. とする。
+// No. は登録時に確定する。検索・種類・テーマ・年表上の並び替えや削除では変えない。
 function refreshItemNumbers(){
   itemNumbers = new Map(
     [...allItems]
-      .sort((a,b)=>{
-        const byCreatedAt = new Date(b.created_at||0) - new Date(a.created_at||0);
-        return byCreatedAt || String(a.id).localeCompare(String(b.id));
-      })
-      .map((item, index)=>[String(item.id), index+1])
+      .map(item=>[String(item.id), Number(item.item_no)])
+      .filter(([, no])=>Number.isSafeInteger(no) && no>0)
   );
 }
 function itemNo(item){ return itemNumbers.get(String(item?.id)); }
