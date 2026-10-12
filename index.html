@@ -194,6 +194,8 @@
   #request-text{min-height:120px}
   #request-prompt{min-height:300px;font-size:13px;line-height:1.6}
   .request-path{display:block;margin-top:4px;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--ink)}
+  .request-actions{display:flex;gap:8px;margin-top:12px}
+  .request-actions button{margin-top:0}
 
   /* bottom nav */
   nav.tabs{
@@ -311,7 +313,10 @@
     <div class="hint">作業先<span class="request-path">/Users/okanoyouhei/claude_work2/history-db</span></div>
     <div class="label" style="margin-top:18px">Codexに送る依頼文</div>
     <textarea id="request-prompt" readonly aria-label="生成された依頼文"></textarea>
-    <button class="primary" id="btn-copy-request" disabled>依頼文をコピー</button>
+    <div class="request-actions">
+      <button class="primary" id="btn-copy-request" disabled>依頼文をコピー</button>
+      <button class="edit-btn" id="btn-open-codex" disabled>Codexで開く</button>
+    </div>
     <div class="hint" id="request-status" role="status" aria-live="polite" style="margin-top:8px"></div>
   </section>
 
@@ -405,7 +410,12 @@ function updateRequestPrompt(){
   const request = $('#request-text').value.trim();
   $('#request-prompt').value = request ? buildRequestPrompt(request) : '';
   $('#btn-copy-request').disabled = !request;
+  $('#btn-open-codex').disabled = !request;
   $('#request-status').textContent = '';
+}
+function buildCodexRequestUrl(){
+  const query = new URLSearchParams({ path:REQUEST_WORKDIR, prompt:$('#request-prompt').value });
+  return `codex://new?${query.toString()}`;
 }
 $('#request-text').addEventListener('input', updateRequestPrompt);
 $('#btn-copy-request').onclick = async ()=>{
@@ -432,6 +442,11 @@ $('#btn-copy-request').onclick = async ()=>{
     prompt.select();
     status.textContent = 'コピーできませんでした。依頼文を選んで、手動でコピーしてください。';
   }
+};
+$('#btn-open-codex').onclick = ()=>{
+  // Codexデスクトップアプリが入っているMacだけで開く。依頼文は入るが、送信・実行は利用者が確認して行う。
+  window.location.href = buildCodexRequestUrl();
+  $('#request-status').textContent = 'Codexを開いています。内容を確認してから送信してください。開かない場合は「依頼文をコピー」を使ってください。';
 };
 
 /* ---------- AI接続 ---------- */
