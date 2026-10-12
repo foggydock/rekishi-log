@@ -188,6 +188,13 @@
   .saved{font-size:13px;color:var(--new);margin-top:6px;display:none}
   .saved.show{display:inline}
 
+  /* request desk */
+  .request-summary{margin:0 0 16px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--accent-soft);font-size:13px;line-height:1.65}
+  .request-summary strong{display:block;color:var(--accent);margin-bottom:3px}
+  #request-text{min-height:120px}
+  #request-prompt{min-height:300px;font-size:13px;line-height:1.6}
+  .request-path{display:block;margin-top:4px;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--ink)}
+
   /* bottom nav */
   nav.tabs{
     position:fixed;bottom:0;left:0;right:0;z-index:10;background:var(--surface);
@@ -293,11 +300,27 @@
     </div>
   </section>
 
+  <!-- 依頼 -->
+  <section id="v-request" class="view">
+    <div class="request-summary">
+      <strong>歴史ログ専用の依頼文を作ります</strong>
+      入力した内容はこの画面の中で依頼文にするだけです。自動送信・自動実行・保存はしません。コピー後、内容を確認してからCodexに貼り付けてください。
+    </div>
+    <div class="label">やってほしいこと</div>
+    <textarea id="request-text" placeholder="例：年表の検索を使いやすくしてほしい"></textarea>
+    <div class="hint">作業先<span class="request-path">/Users/okanoyouhei/claude_work2/history-db</span></div>
+    <div class="label" style="margin-top:18px">Codexに送る依頼文</div>
+    <textarea id="request-prompt" readonly aria-label="生成された依頼文"></textarea>
+    <button class="primary" id="btn-copy-request" disabled>依頼文をコピー</button>
+    <div class="hint" id="request-status" role="status" aria-live="polite" style="margin-top:8px"></div>
+  </section>
+
 </div>
 
 <nav class="tabs">
   <button data-view="record" class="on"><span class="ic" style="position:relative">✎<span id="draft-dot" style="display:none;position:absolute;top:-2px;right:-6px;width:8px;height:8px;border-radius:50%;background:var(--new)"></span></span>記録</button>
   <button data-view="timeline"><span class="ic">≡</span>年表</button>
+  <button data-view="request"><span class="ic">✉</span>依頼</button>
   <button data-view="settings"><span class="ic">⚙</span>設定</button>
 </nav>
 
@@ -371,6 +394,45 @@ document.querySelectorAll('nav.tabs button').forEach(b=>{
     if(v==='settings') loadFallbackStatus();
   };
 });
+
+/* ---------- 歴史ログへの依頼文 ---------- */
+const REQUEST_WORKDIR = '/Users/okanoyouhei/claude_work2/history-db';
+const REQUEST_MISTAKE_DIR = '/Users/okanoyouhei/Library/Mobile Documents/iCloud~md~obsidian/Documents/ObsidianVault/mistake';
+function buildRequestPrompt(request){
+  return `歴史ログ（rekishi-log）への依頼です。\n\n【やってほしいこと】\n${request}\n\n【作業先】\n${REQUEST_WORKDIR}\n\n【作業前の確認】\n- 最初に ${REQUEST_WORKDIR}/AGENTS.md を読み、指示に従ってください。\n- 作業前に ${REQUEST_MISTAKE_DIR} を確認し、history-dbに関係する注意点と汎用の注意点を横断して確認してください。注意点や実際の記録データを公開リポジトリへ転載しないでください。\n- 既存の変更や未コミットのファイルがあれば、勝手に消したり上書きしたりしないでください。\n\n【進め方】\n- 変更はこの依頼に必要な最小限にしてください。\n- tests/ があれば、変更前と変更後にテストを実行してください。\n- データベース（Supabase）の中身・テーブル・権限・認証の設定は、このリポジトリから変更しないでください。必要そうなら、変更せず理由を説明して質問してください。\n- 不明点や作業範囲があいまいな場合は、実装前に画面案と使い方を説明し、確認を待ってください。\n\n【完了時】\n- 変更内容と確認結果を、日本語で短く説明してください。\n- main への push は本番公開になります。テスト結果・変更ファイル・コミット内容を示し、push直前に私の明確な了承を得てください。了承後は日本語のコミットメッセージで main にコミットして push してください。`;
+}
+function updateRequestPrompt(){
+  const request = $('#request-text').value.trim();
+  $('#request-prompt').value = request ? buildRequestPrompt(request) : '';
+  $('#btn-copy-request').disabled = !request;
+  $('#request-status').textContent = '';
+}
+$('#request-text').addEventListener('input', updateRequestPrompt);
+$('#btn-copy-request').onclick = async ()=>{
+  const prompt = $('#request-prompt');
+  const button = $('#btn-copy-request');
+  const status = $('#request-status');
+  let copied = false;
+  try{
+    await navigator.clipboard.writeText(prompt.value);
+    copied = true;
+  }catch(_e){
+    try{
+      prompt.focus();
+      prompt.select();
+      copied = document.execCommand('copy');
+    }catch(_e2){ copied = false; }
+  }
+  if(copied){
+    status.textContent = 'コピーしました。内容を確認してからCodexに貼り付けてください。';
+    button.textContent = 'コピーしました';
+    setTimeout(()=>{ button.textContent = '依頼文をコピー'; }, 1500);
+  }else{
+    prompt.focus();
+    prompt.select();
+    status.textContent = 'コピーできませんでした。依頼文を選んで、手動でコピーしてください。';
+  }
+};
 
 /* ---------- AI接続 ---------- */
 // APIキーはブラウザや通常のテーブルには置かない。認証済みユーザーだけが
