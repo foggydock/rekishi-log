@@ -156,8 +156,12 @@
   .ef input:focus,.ef select:focus{outline:none;border-color:var(--accent)}
   .fresh-toggle{margin-bottom:10px;padding:8px 16px;border:1px solid var(--new);background:var(--surface);color:var(--new);border-radius:20px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer}
   .fresh-toggle.on{background:var(--new);color:#fff}
-  .search-box{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);margin-bottom:8px;font-family:inherit;color:var(--ink)}
+  .search-wrap{position:relative}
+  .search-box{width:100%;padding:11px 40px 11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:var(--surface);margin-bottom:2px;font-family:inherit;color:var(--ink)}
   .search-box:focus{outline:none;border-color:var(--accent)}
+  .search-clear{position:absolute;right:7px;top:7px;width:32px;height:32px;border:0;border-radius:50%;background:var(--line);color:var(--muted);font-size:22px;line-height:1;cursor:pointer}
+  .search-result{min-height:18px;margin:0 2px 4px;font-size:12px;color:var(--muted)}
+  .search-hidden{display:none!important}
 
   /* map */
   .map-toggle{margin-bottom:10px;padding:8px 16px;border:1px solid #3B6D11;background:var(--surface);color:#3B6D11;border-radius:20px;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer}
@@ -261,7 +265,11 @@
       <button class="fresh-toggle" id="sort-toggle">最近育った順</button>
       <button class="map-toggle" id="map-toggle" style="display:none">🗺 地図で見る</button>
     </div>
-    <input id="search" class="search-box" placeholder="🔍 名前で検索…">
+    <div class="search-wrap">
+      <input id="search" class="search-box" placeholder="🔍 名前・説明・時代・地域・テーマで検索…">
+      <button id="search-clear" class="search-clear" type="button" aria-label="検索を消す" hidden>×</button>
+    </div>
+    <div id="search-result" class="search-result" role="status" aria-live="polite"></div>
     <div class="filter-row"><span class="filter-label">種類</span><div class="chips" id="type-chips"></div></div>
     <div class="filter-row"><span class="filter-label">テーマ</span><div class="chips" id="chips"></div></div>
     <div id="tl-wrap"></div>
@@ -379,12 +387,41 @@ let freshOnly = false;
 let sortByGrown = false;
 let lastUpdate = null;
 let searchDebounce = null;
+function itemMatchesSearch(item, query=searchQuery){
+  if(!query) return true;
+  const text = [item.name,item.summary,item.era_label,item.region,item.theme,item.type]
+    .filter(Boolean).join(' ').toLocaleLowerCase('ja');
+  return text.includes(query.toLocaleLowerCase('ja'));
+}
+function updateSearchResult(count){
+  $('#search-clear').hidden = !searchQuery;
+  $('#search-result').textContent = searchQuery ? `「${searchQuery}」の検索結果：${count}件` : '';
+}
+function applySearchFilter(){
+  const cards = [...document.querySelectorAll('#tl-wrap .card')];
+  const byId = new Map(allItems.map(item=>[String(item.id), item]));
+  let count = 0;
+  cards.forEach(card=>{
+    const show = itemMatchesSearch(byId.get(String(card.dataset.id)) || {});
+    card.classList.toggle('search-hidden', !show);
+    if(show) count++;
+  });
+  document.querySelectorAll('#tl-wrap .tl-group').forEach(group=>{
+    group.classList.toggle('search-hidden', !!searchQuery && !group.querySelector('.card:not(.search-hidden)'));
+  });
+  const empty = $('#search-empty');
+  if(empty) empty.hidden = !searchQuery || count>0;
+  updateSearchResult(count);
+}
 $('#search').oninput = e => {
   // 地図表示中は入力のたびにLeaflet地図が破棄・再構築されて重いため、入力が止まってから描画する
   const v = e.target.value;
   clearTimeout(searchDebounce);
-  searchDebounce = setTimeout(()=>{ searchQuery = v.trim(); renderTimeline(); }, mapMode ? 350 : 0);
+  searchQuery = v.trim();
+  if(mapMode){ searchDebounce = setTimeout(renderTimeline, 350); }
+  else applySearchFilter();
 };
+$('#search-clear').onclick = ()=>{ $('#search').value=''; searchQuery=''; clearTimeout(searchDebounce); mapMode ? renderTimeline() : applySearchFilter(); $('#search').focus(); };
 $('#fresh-toggle').onclick = () => { freshOnly = !freshOnly; $('#fresh-toggle').classList.toggle('on', freshOnly); renderTimeline(); };
 $('#sort-toggle').onclick = () => { sortByGrown = !sortByGrown; $('#sort-toggle').classList.toggle('on', sortByGrown); renderTimeline(); };
 document.querySelectorAll('nav.tabs button').forEach(b=>{
@@ -1035,26 +1072,32 @@ function cardHtml(i){
         <div class="meta"><span class="tag ${typeClass(i.type)}">${esc(i.type||'その他')}</span>${i.region?esc(i.region)+' ・ ':''}<span class="count">${factCounts[i.id]||0}件の情報</span></div>
       </div>`;
 }
-function filteredItems(){
+function filteredItems(includeSearch=true){
   let list = activeFilter==='すべて'? allItems : allItems.filter(i=>i.theme===activeFilter);
   if(activeType!=='すべて') list = list.filter(i=>i.type===activeType);
-  if(searchQuery) list = list.filter(i=>(i.name||'').toLowerCase().includes(searchQuery.toLowerCase()));
+  if(includeSearch && searchQuery) list = list.filter(i=>itemMatchesSearch(i));
   if(freshOnly) list = list.filter(isFresh);
   return list;
 }
 function renderTimeline(){
   const wrap=$('#tl-wrap');
   destroyMap();                       // これから中身を作り直すので、前の地図は必ず片付ける
-  const list0 = filteredItems();
+  const list0 = filteredItems(false);
   updateMapToggle();
-  if(mapMode){ renderMapView(list0); return; }
+  if(mapMode){
+    const matched = list0.filter(item=>itemMatchesSearch(item));
+    updateSearchResult(matched.length);
+    renderMapView(matched);
+    return;
+  }
   let list = list0;
-  if(!list.length){ wrap.innerHTML='<div class="empty">'+(freshOnly?'最近24時間の新着はありません。':'まだ項目がありません。<br>「記録」から聴いた内容を貼って更新してみましょう。')+'</div>'; return; }
+  if(!list.length){ wrap.innerHTML='<div class="empty">'+(freshOnly?'最近24時間の新着はありません。':'まだ項目がありません。<br>「記録」から聴いた内容を貼って更新してみましょう。')+'</div>'; updateSearchResult(0); return; }
   if(sortByGrown){
     // 最終更新が新しい順のフラット一覧（era区分なし）
     list = [...list].sort((a,b)=> new Date(b.updated_at||0) - new Date(a.updated_at||0));
-    wrap.innerHTML = '<div class="tl"><div class="tl-group">'+list.map(cardHtml).join('')+'</div></div>';
+    wrap.innerHTML = '<div class="tl"><div class="tl-group">'+list.map(cardHtml).join('')+'</div></div><div id="search-empty" class="empty" hidden>一致する項目はありません。</div>';
     wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
+    applySearchFilter();
     return;
   }
   // 同じ時代区分（era_label）でまとめる
@@ -1068,8 +1111,9 @@ function renderTimeline(){
     <div class="tl-group">
       <div class="tl-era">${esc(g.era)}</div>
       ${g.items.map(cardHtml).join('')}
-    </div>`).join('')+'</div>';
+    </div>`).join('')+'</div><div id="search-empty" class="empty" hidden>一致する項目はありません。</div>';
   wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
+  applySearchFilter();
 }
 
 /* ---------- 地図ビュー（種類「地域」のとき） ---------- */
