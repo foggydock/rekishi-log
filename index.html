@@ -1401,21 +1401,13 @@ async function openDetail(id){
 let deletingItem = false;
 async function deleteItem(item, btn){
     if(deletingItem) return;
-    if(!confirm(`「${item.name}」を削除しますか？（この項目の情報も消えます。削除前に内容をファイルに保存します）`)) return;
+    if(!confirm(`「${item.name}」を削除しますか？（この項目と、積み重なった知識を完全に削除します）`)) return;
     deletingItem = true;
     const label = btn.textContent;
     const reviewButtons = [...$('#review').querySelectorAll('button')];
     reviewButtons.forEach(b=>b.disabled=true);
     btn.disabled = true; btn.textContent = '削除しています…';
     try{
-      // 詳細画面の取得結果を流用せず、全件取得に成功してからバックアップする。
-      const facts = await fetchAllRows('hist_facts','*',q=>q.eq('item_id',item.id).order('id',{ascending:true}));
-      const saved = downloadBackupMd([item], facts, `削除_${item.name}`);
-      if(!saved){
-        if(!confirm('バックアップファイルの保存に失敗した可能性があります。バックアップ無しで削除しますか？')){
-          return;
-        }
-      }
       const { data, error } = await supa.from('hist_items').delete().eq('id',item.id).eq('user_id',currentUid).select('id');
       if(error) throw error;
       if(!data || data.length!==1) throw new Error('削除を確認できませんでした。画面を再読み込みして確認してください。');
