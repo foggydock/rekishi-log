@@ -515,18 +515,13 @@ async function loadFallbackStatus(){
 /* ---------- Gemini 呼び出し ---------- */
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 const isNetErr = m => /load failed|failed to fetch|networkerror|network error|typeerror.*fetch/i.test(m||'');
-// 再試行中の案内は、今その処理を動かしている画面に出す（設定画面の各状態欄／記録画面のボタン）
-let activeStatusSel = null;
-function retryNote(msg){
-  if(activeStatusSel) $(activeStatusSel).textContent = msg;
-  // 「更新する」の処理中だけボタンに出す。年表・振り返りの読み込み中に出すと、ボタンの表示が戻らない
-  else if($('#btn-update').disabled) $('#btn-label').textContent = msg;
-}
+// 再試行中の案内は、処理を始めた側が渡した表示先にだけ出す。
+function retryNote(onRetry, msg){ if(onRetry) onRetry(msg); }
 // Supabase通信を、一時的な通信エラーなら自動で数回リトライする
-async function dbRetry(fn, label){
+async function dbRetry(fn, label, onRetry){
   let lastErr;
   for(let a=0;a<3;a++){
-    if(a>0){ retryNote('通信を再試行中…'); await sleep(800*a); }
+    if(a>0){ retryNote(onRetry, '通信を再試行中…'); await sleep(800*a); }
     const { data, error } = await fn();
     if(!error) return data;
     lastErr = error;
@@ -553,14 +548,14 @@ function parseGeminiItems(data){
 // AIの返事を待つ上限。サーバー側の処理上限（約150秒）より少し長くし、超えたら待つのをやめる
 const AI_WAIT_MS = 160000;
 let aiAbort = null;   // 待っているAI処理。「待つのをやめる」やログアウトで止める
-async function geminiCall(prompt, responseSchema){
+async function geminiCall(prompt, responseSchema, onRetry){
   const ctl = new AbortController();
   aiAbort = ctl;
   const stopped = new Promise(r=>ctl.signal.addEventListener('abort', r, {once:true}));
   let lastErr;
   try{
     for(let attempt=0; attempt<4; attempt++){
-      if(attempt>0){ retryNote('混雑のため再試行中…'); await Promise.race([sleep(900*Math.pow(2,attempt-1)), stopped]); }
+      if(attempt>0){ retryNote(onRetry, '混雑のため再試行中…'); await Promise.race([sleep(900*Math.pow(2,attempt-1)), stopped]); }
       if(ctl.signal.aborted) break;
       const timer = setTimeout(()=>{ ctl.timedOut = true; ctl.abort(); }, AI_WAIT_MS);
       let data, error;
@@ -590,22 +585,22 @@ async function geminiCall(prompt, responseSchema){
 
 // PostgRESTはデフォルトで1回のselectが最大1000件までしか返らないため、
 // 件数がそれを超えても全件取れるようrangeでページ送りする
-async function fetchAllRows(table, columns, applyOrder){
+async function fetchAllRows(table, columns, applyOrder, onRetry){
   const pageSize = 1000;
   let all = [], from = 0;
   while(true){
     let q = supa.from(table).select(columns).range(from, from+pageSize-1);
     q = applyOrder ? applyOrder(q) : q.order('id',{ascending:true});
-    const page = await dbRetry(()=>q, table+'の取得');
+    const page = await dbRetry(()=>q, table+'の取得', onRetry);
     all = all.concat(page);
     if(page.length < pageSize) break;
     from += pageSize;
   }
   return all;
 }
-async function fetchAllItems(){
+async function fetchAllItems(onRetry){
   // 更新時に既存値を守れるよう、上書き対象になりうる列は全部取得しておく
-  return fetchAllRows('hist_items', 'id,name,summary,lat,lng,type,sort_year,era_label,region,theme,portrait_image_url,portrait_source_url,portrait_credit,portrait_license');
+  return fetchAllRows('hist_items', 'id,name,summary,lat,lng,type,sort_year,era_label,region,theme,portrait_image_url,portrait_source_url,portrait_credit,portrait_license', null, onRetry);
 }
 // AIが返した緯度経度を検証する。数値でなかったり範囲外なら null（＝不明）にする
 function validCoord(lat, lng){
@@ -644,7 +639,7 @@ function nameMentioned(name, text){
   }
   return false;
 }
-async function extractItems(rawText, existingItems){
+async function extractItems(rawText, existingItems, onRetry){
   const candidates = existingItems.filter(i => i.name && nameMentioned(i.name, rawText));
   const existingList = candidates.length
     ? candidates.map(i=>`- ${i.name}`).join('\n')
@@ -672,7 +667,7 @@ ${rawText}
 
 注意: 実質的な歴史的内容が無いものは項目にしない。出力はJSONのみ。`;
 
-  return parseGeminiItems(await geminiCall(prompt, EXTRACT_SCHEMA));
+  return parseGeminiItems(await geminiCall(prompt, EXTRACT_SCHEMA, onRetry));
 }
 
 /* ---------- 古い元テキストの自動削除（hist_entriesは重複確認用の一時データなので溜め続けない） ---------- */
@@ -687,11 +682,11 @@ async function cleanupOldEntries(){
 // URL長の上限や PostgREST のフィルタ構文に引っ掛かって 400 になるため、本文は受信後に比較する。
 // hist_entries は30日で掃除する一時データだが、掃除されていない古い行があっても見落とさないよう
 // ページングして調べる。
-async function findDuplicateEntry(raw){
+async function findDuplicateEntry(raw, onRetry){
   const pageSize = 1000;
   for(let from=0;;from+=pageSize){
     const page = await dbRetry(()=>supa.from('hist_entries').select('id,created_at,raw_text')
-      .eq('user_id', currentUid).order('created_at',{ascending:false}).range(from,from+pageSize-1), '記録の重複確認');
+      .eq('user_id', currentUid).order('created_at',{ascending:false}).range(from,from+pageSize-1), '記録の重複確認', onRetry);
     const duplicate = page.find(entry=>entry.raw_text===raw);
     if(duplicate) return duplicate;
     if(page.length < pageSize) return null;
@@ -779,12 +774,13 @@ $('#btn-update').onclick = async ()=>{
   // 保存しないよう止める。保存先も、開始時の利用者に固定する。
   const uid = currentUid;
   const checkSameUser = ()=>{ if(uid !== currentUid) throw new Error('ログイン状態が変わったため中止しました'); };
+  const updateRetryNote = msg=>{ $('#btn-label').textContent = msg; };
   setLoading(true);
   hideResult();
   try{
     // 0) 同じ本文がすでに保存済みなら確認する。Gemini混雑等の失敗後に「更新する」を
     //    押し直すと、以前は同じ記録・同じ情報がそのまま重複して積み上がっていたため
-    const dupEntry = await findDuplicateEntry(raw);
+    const dupEntry = await findDuplicateEntry(raw, updateRetryNote);
     checkSameUser();
     if(dupEntry){
       const d = new Date(dupEntry.created_at);
@@ -794,14 +790,14 @@ $('#btn-update').onclick = async ()=>{
     }
 
     // 1) 既存項目を取得（AIに渡して重複防止・既存値の保持に使う）。1000件超もあるので全ページ取得する
-    const existing = await fetchAllItems();
+    const existing = await fetchAllItems(updateRetryNote);
     checkSameUser();
     const map = new Map(existing.map(i=>[norm(i.name).toLowerCase(), i]));
 
     // 2) AIで抽出（混雑時は自動で数回リトライ）。待っている間だけ「待つのをやめる」を出す
     $('#btn-cancel-ai').hidden = false;
     let items;
-    try{ items = await extractItems(raw, existing); }
+    try{ items = await extractItems(raw, existing, updateRetryNote); }
     finally{ $('#btn-cancel-ai').hidden = true; }
     checkSameUser();
     if(!items.length){ showResult('歴史的な項目を見つけられませんでした。文章を変えて試してみてください。', true); setLoading(false); return; }
@@ -809,7 +805,7 @@ $('#btn-update').onclick = async ()=>{
     // 3) AI成功後に元テキストを保存（やり直し用に丸ごと残す。失敗時は無駄な重複を残さない）
     const entry = await dbRetry(()=>supa
       .from('hist_entries').insert({ raw_text: raw, source: null, user_id: uid })
-      .select().single(), '記録の保存');
+      .select().single(), '記録の保存', updateRetryNote);
 
     // 4) 項目をupsert＋知識の層を追加。1件失敗しても他の項目は続行し、最後にまとめて報告する
     let grewList=[], bornList=[], failedNames=[];
@@ -844,15 +840,15 @@ $('#btn-update').onclick = async ()=>{
         };
         let itemId;
         if(ex){
-          await dbRetry(()=>supa.from('hist_items').update({...fields, updated_at:new Date().toISOString()}).eq('id', ex.id), '項目の更新');
+          await dbRetry(()=>supa.from('hist_items').update({...fields, updated_at:new Date().toISOString()}).eq('id', ex.id), '項目の更新', updateRetryNote);
           itemId = ex.id; grewList.push({id:itemId, name});
         }else{
-          const ni = await dbRetry(()=>supa.from('hist_items').insert(fields).select().single(), '項目の作成');
+          const ni = await dbRetry(()=>supa.from('hist_items').insert(fields).select().single(), '項目の作成', updateRetryNote);
           itemId = ni.id; bornList.push({id:itemId, name});
           map.set(key, ni);
         }
         if(it.new_fact){
-          await dbRetry(()=>supa.from('hist_facts').insert({ item_id:itemId, entry_id:entry.id, fact_text: it.new_fact, user_id: uid }), '情報の追加');
+          await dbRetry(()=>supa.from('hist_facts').insert({ item_id:itemId, entry_id:entry.id, fact_text: it.new_fact, user_id: uid }), '情報の追加', updateRetryNote);
         }
       }catch(itemErr){
         console.error('項目の保存に失敗:', name, itemErr);
@@ -868,8 +864,8 @@ $('#btn-update').onclick = async ()=>{
     // 一覧キャッシュを更新する。失敗しても保存済みデータを失敗扱いにしない。
     try{
       const [freshItems, freshFacts] = await Promise.all([
-        fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true})),
-        fetchAllRows('hist_facts','item_id')
+        fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true}), updateRetryNote),
+        fetchAllRows('hist_facts','item_id', null, updateRetryNote)
       ]);
       checkSameUser();
       applyTimelineData(freshItems, freshFacts);
@@ -1454,7 +1450,9 @@ function openEdit(item){
     <button class="edit-btn" id="e-back">もどる</button>`;
   $('#e-close').onclick=closeDetail;
   $('#e-back').onclick=()=>openDetail(item.id);
+  let saving = false;
   $('#e-save').onclick=async()=>{
+    if(saving) return;
     const name=$('#e-name').value.trim();
     if(!name){ alert('名前を入れてください'); return; }
     const yv=$('#e-year').value.trim();
@@ -1466,21 +1464,29 @@ function openEdit(item){
     const portraitSourceUrl=norm($('#e-portrait-source').value);
     if(portraitImageUrl && !safeHttpUrl(portraitImageUrl)){ alert('肖像の画像URLは http:// または https:// で始まるものを入れてください。'); return; }
     if(portraitSourceUrl && !safeHttpUrl(portraitSourceUrl)){ alert('肖像の掲載元URLは http:// または https:// で始まるものを入れてください。'); return; }
-    const { error } = await supa.from('hist_items').update({
-      name, type:$('#e-type').value, theme:$('#e-theme').value.trim(),
-      region:$('#e-region').value.trim(), era_label:$('#e-era').value.trim(),
-      lat: co? co.lat : null, lng: co? co.lng : null,
-      portrait_image_url: portraitImageUrl || null, portrait_source_url: portraitSourceUrl || null,
-      portrait_credit: norm($('#e-portrait-credit').value) || null,
-      portrait_license: norm($('#e-portrait-license').value) || null,
-      sort_year: yv===''? null : Math.round(Number(yv)), updated_at:new Date().toISOString()
-    }).eq('id', item.id);
-    if(error){
-      if(/duplicate|23505|unique/i.test(error.message)) alert('その名前の項目は既にあります。（同じ名前への統合機能は今後の改善で対応します）');
-      else alert('保存できませんでした：'+error.message);
-      return;
+    saving = true;
+    const btn=$('#e-save'), label=btn.textContent;
+    btn.disabled=true; btn.textContent='保存しています…';
+    try{
+      const { error } = await supa.from('hist_items').update({
+        name, type:$('#e-type').value, theme:$('#e-theme').value.trim(),
+        region:$('#e-region').value.trim(), era_label:$('#e-era').value.trim(),
+        lat: co? co.lat : null, lng: co? co.lng : null,
+        portrait_image_url: portraitImageUrl || null, portrait_source_url: portraitSourceUrl || null,
+        portrait_credit: norm($('#e-portrait-credit').value) || null,
+        portrait_license: norm($('#e-portrait-license').value) || null,
+        sort_year: yv===''? null : Math.round(Number(yv)), updated_at:new Date().toISOString()
+      }).eq('id', item.id);
+      if(error){
+        if(/duplicate|23505|unique/i.test(error.message)) alert('その名前の項目は既にあります。（同じ名前への統合機能は今後の改善で対応します）');
+        else alert('保存できませんでした：'+error.message);
+        return;
+      }
+      closeDetail(); await loadTimeline();
+    }finally{
+      saving = false;
+      btn.disabled=false; btn.textContent=label;
     }
-    closeDetail(); await loadTimeline();
   };
 }
 let detailReturnFocus = null;
@@ -1614,19 +1620,19 @@ const GEO_SCHEMA = {
   } } },
   required:['items']
 };
-async function geocodeBatch(rows){
-  return parseGeminiItems(await geminiCall(buildGeocodePrompt(rows), GEO_SCHEMA));
+async function geocodeBatch(rows, onRetry){
+  return parseGeminiItems(await geminiCall(buildGeocodePrompt(rows), GEO_SCHEMA, onRetry));
 }
 $('#btn-geocode').onclick = async ()=>{
   const b=$('#btn-geocode'), st=$('#geo-status');
   b.disabled=true; st.textContent='対象を数えています…';
-  activeStatusSel = '#geo-status';
+  const geoRetryNote = msg=>{ st.textContent = msg; };
   const uid = currentUid;
   let done=0, notFound=0, apiFailed=0, firstErr='';
   try{
-    const items = await fetchAllRows('hist_items','id,name,type,era_label,region,lat,lng');
+    const items = await fetchAllRows('hist_items','id,name,type,era_label,region,lat,lng', null, geoRetryNote);
     const targets = (items||[]).filter(i=>i.type==='地域' && !validCoord(i.lat, i.lng));
-    if(!targets.length){ st.textContent='座標が必要な「地域」の項目はありませんでした。'; b.disabled=false; activeStatusSel=null; return; }
+    if(!targets.length){ st.textContent='座標が必要な「地域」の項目はありませんでした。'; b.disabled=false; return; }
     const SIZE = 12;                                  // 1回の出力を短く保つ
     for(let s=0; s<targets.length; s+=SIZE){
       // 途中でログアウト・別アカウントへ切り替わったら、前の利用者の地名をAIへ送り続けない
@@ -1635,7 +1641,7 @@ $('#btn-geocode').onclick = async ()=>{
       st.textContent = `AIに問い合わせ中… ${s}／${targets.length}件`;
       if(s>0) await sleep(1200);                      // 連続で叩いてレート制限に当たらないように
       let out;
-      try{ out = await geocodeBatch(chunk); }
+      try{ out = await geocodeBatch(chunk, geoRetryNote); }
       catch(e){                                       // 失敗しても残りは続ける。ただし理由は必ず残す
         console.error('座標の取得に失敗:', e);
         apiFailed += chunk.length;
@@ -1648,7 +1654,7 @@ $('#btn-geocode').onclick = async ()=>{
         const co = row ? validCoord(o.lat, o.lng) : null;
         if(!row || !co) continue;
         try{
-          await dbRetry(()=>supa.from('hist_items').update({ lat:co.lat, lng:co.lng }).eq('id', row.id), '座標の保存');
+          await dbRetry(()=>supa.from('hist_items').update({ lat:co.lat, lng:co.lng }).eq('id', row.id), '座標の保存', geoRetryNote);
           done++;
         }catch(e){
           console.error('座標の保存に失敗:', e);
@@ -1659,7 +1665,7 @@ $('#btn-geocode').onclick = async ()=>{
       }
       notFound += byName.size;                        // AIが返さなかった／場所を特定できなかった分
     }
-    if(uid!==currentUid){ activeStatusSel = null; b.disabled=false; return; }
+    if(uid!==currentUid){ b.disabled=false; return; }
     let msg = `${done}件に座標を付けました。`;
     if(notFound)  msg += `（${notFound}件はAIが場所を特定できませんでした。項目の編集画面から手で入れられます）`;
     if(apiFailed) msg += `（${apiFailed}件はAIへの問い合わせ自体が失敗しました。理由：${firstErr}）`;
@@ -1670,7 +1676,6 @@ $('#btn-geocode').onclick = async ()=>{
     console.error(e);
     st.textContent = 'うまくいきませんでした：' + (e.message||e);
   }
-  activeStatusSel = null;
   b.disabled=false;
 };
 
@@ -1678,11 +1683,11 @@ $('#btn-geocode').onclick = async ()=>{
 $('#btn-dupes').onclick = async ()=>{
   const b=$('#btn-dupes'), st=$('#dupe-status'), list=$('#dupe-list');
   b.disabled=true; st.textContent='さがしています…'; list.innerHTML='';
-  activeStatusSel = '#dupe-status';
+  const dupeRetryNote = msg=>{ st.textContent = msg; };
   const uid = currentUid;
   try{
-    const items = await fetchAllRows('hist_items','id,name,type,summary,region,era_label,theme,lat,lng,created_at');
-    if(uid!==currentUid){ activeStatusSel = null; b.disabled=false; return; }
+    const items = await fetchAllRows('hist_items','id,name,type,summary,region,era_label,theme,lat,lng,created_at', null, dupeRetryNote);
+    if(uid!==currentUid){ b.disabled=false; return; }
     const groups = new Map();
     (items||[]).forEach(it=>{
       const key = dupeKey(it.name);
@@ -1692,7 +1697,7 @@ $('#btn-dupes').onclick = async ()=>{
     });
     const dupeGroups = [...groups.values()].filter(g=>g.length>1)
       .sort((a,b)=>a[0].name.localeCompare(b[0].name,'ja'));
-    if(!dupeGroups.length){ st.textContent='同じ名前の項目は見つかりませんでした。'; b.disabled=false; activeStatusSel=null; return; }
+    if(!dupeGroups.length){ st.textContent='同じ名前の項目は見つかりませんでした。'; b.disabled=false; return; }
     st.textContent = `同じ名前の項目が${dupeGroups.length}組見つかりました。残す方を選んで「まとめる」を押してください。`;
     list.innerHTML = dupeGroups.map((g,gi)=>`
       <div class="dupe-group" data-gi="${gi}">
@@ -1717,12 +1722,12 @@ $('#btn-dupes').onclick = async ()=>{
         const others = group.filter((_,i)=>i!==keepIdx);
         btn.disabled = true; btn.textContent = 'まとめています…';
         try{
-          const otherFacts = await fetchAllRows('hist_facts','*',q=>q.in('item_id', others.map(o=>o.id)).order('added_date',{ascending:true}));
+          const otherFacts = await fetchAllRows('hist_facts','*',q=>q.in('item_id', others.map(o=>o.id)).order('added_date',{ascending:true}), dupeRetryNote);
           const saved = downloadBackupMd(others, otherFacts, `統合_${keep.name}`);
           if(!saved && !confirm('バックアップファイルの保存に失敗した可能性があります。バックアップ無しでまとめますか？')){
             btn.disabled=false; btn.textContent='この項目にまとめる'; return;
           }
-          await mergeDuplicateItems(keep, others);
+          await mergeDuplicateItems(keep, others, dupeRetryNote);
         }
         catch(e){ console.error(e); alert('まとめられませんでした：'+(e.message||e)); btn.disabled=false; btn.textContent='この項目にまとめる'; return; }
         list.querySelector(`.dupe-group[data-gi="${gi}"]`)?.remove();
@@ -1734,14 +1739,13 @@ $('#btn-dupes').onclick = async ()=>{
     console.error(e);
     st.textContent = 'うまくいきませんでした：' + (e.message||e);
   }
-  activeStatusSel = null;
   b.disabled=false;
 };
-async function mergeDuplicateItems(keep, others){
+async function mergeDuplicateItems(keep, others, onRetry){
   const otherIds = others.map(o=>o.id);
   // DB関数内で「情報の補完 → 知識の付け替え → 重複項目の削除」を1トランザクションにする。
   // 途中の通信断やエラー時に、知識だけが移った中間状態を残さない。
-  await dbRetry(()=>supa.rpc('merge_hist_items',{p_keep_id:keep.id,p_other_ids:otherIds}), '重複項目の統合');
+  await dbRetry(()=>supa.rpc('merge_hist_items',{p_keep_id:keep.id,p_other_ids:otherIds}), '重複項目の統合', onRetry);
 }
 
 /* ---------- バックアップ書き出し ---------- */
@@ -1782,13 +1786,13 @@ function downloadBackupMd(items, facts, filenameStub){
 $('#btn-export').onclick = async ()=>{
   const b=$('#btn-export'); b.disabled=true; b.textContent='書き出し中…';
   const status=$('#export-status'); status.textContent='バックアップを準備しています…';
-  activeStatusSel = '#export-status';
+  const exportRetryNote = msg=>{ status.textContent = msg; };
   const uid = currentUid;
   try{
-    const items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true}));
-    const facts = await fetchAllRows('hist_facts','*',q=>q.order('added_date',{ascending:true}));
+    const items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true}), exportRetryNote);
+    const facts = await fetchAllRows('hist_facts','*',q=>q.order('added_date',{ascending:true}), exportRetryNote);
     // 書き出し中にログアウト・別アカウントへ切り替わったら、ファイルを作らない
-    if(uid!==currentUid){ activeStatusSel = null; b.disabled=false; b.textContent='全データを書き出す'; return; }
+    if(uid!==currentUid){ b.disabled=false; b.textContent='全データを書き出す'; return; }
     const saved = downloadBackupMd(items, facts, '全データ');
     if(!saved) throw new Error('ダウンロードを開始できませんでした。');
     status.textContent = `ダウンロードを開始しました（${saved.filename}、${saved.itemCount}項目・${saved.factCount}件）。ブラウザの「ダウンロード」から開き、先頭の件数を確認してください。`;
@@ -1796,7 +1800,6 @@ $('#btn-export').onclick = async ()=>{
     status.textContent='書き出しに失敗しました。通信状況を確認して、もう一度お試しください。';
     alert('書き出しに失敗しました：'+(e.message||e));
   }
-  activeStatusSel = null;
   b.disabled=false; b.textContent='全データを書き出す';
 };
 </script>
