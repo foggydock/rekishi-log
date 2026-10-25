@@ -979,9 +979,10 @@ async function loadReview(){
 }
 function pickReview(){
   const wrap=$('#review');
-  if(!allItems.length){ wrap.style.display='none'; return; }
+  if(!allItems.length){ reviewItemId=null; wrap.style.display='none'; return; }
   const candidates = allItems.filter(i=>!i.review_excluded);
   if(!candidates.length){
+    reviewItemId=null;
     wrap.style.display='block';
     wrap.innerHTML='<div class="rev-card"><div class="rev-head">📖 今日の振り返り</div><div class="hint">振り返りの対象がありません。記録は年表に残っています。項目を開いて「振り返りの対象に戻す」を押すと再開できます。</div></div>';
     return;
@@ -1000,6 +1001,14 @@ function pickReview(){
     r -= weights[k];
     if(r <= 0){ i = candidates[k]; break; }
   }
+  renderReview(i);
+}
+// 編集後に、表示中の振り返りだけを新しい内容で描き直せるようにしておく。
+// 別の項目を抽選し直すと「保存した項目が消えた」ように見えるため、ここでは選び直さない。
+let reviewItemId = null;
+function renderReview(i){
+  reviewItemId=String(i.id);
+  const wrap=$('#review');
   const meta=[i.era_label,i.region,i.theme].filter(Boolean).join(' ・ ');
   wrap.style.display='block';
   wrap.innerHTML=`<div class="rev-card">
@@ -1466,9 +1475,10 @@ function openEdit(item){
     if(portraitSourceUrl && !safeHttpUrl(portraitSourceUrl)){ alert('肖像の掲載元URLは http:// または https:// で始まるものを入れてください。'); return; }
     saving = true;
     const btn=$('#e-save'), label=btn.textContent;
+    const uid=currentUid;
     btn.disabled=true; btn.textContent='保存しています…';
     try{
-      const { error } = await supa.from('hist_items').update({
+      const { data, error } = await supa.from('hist_items').update({
         name, type:$('#e-type').value, theme:$('#e-theme').value.trim(),
         region:$('#e-region').value.trim(), era_label:$('#e-era').value.trim(),
         lat: co? co.lat : null, lng: co? co.lng : null,
@@ -1476,13 +1486,27 @@ function openEdit(item){
         portrait_credit: norm($('#e-portrait-credit').value) || null,
         portrait_license: norm($('#e-portrait-license').value) || null,
         sort_year: yv===''? null : Math.round(Number(yv)), updated_at:new Date().toISOString()
-      }).eq('id', item.id);
+      }).eq('id', item.id).eq('user_id',uid).select().maybeSingle();
       if(error){
         if(/duplicate|23505|unique/i.test(error.message)) alert('その名前の項目は既にあります。（同じ名前への統合機能は今後の改善で対応します）');
         else alert('保存できませんでした：'+error.message);
         return;
       }
+      if(!data || uid!==currentUid){
+        alert('保存を確認できませんでした。内容は閉じずに残しているので、通信状況を確認してもう一度お試しください。');
+        return;
+      }
+      Object.assign(item, data);
+      const cached = allItems.find(i=>String(i.id)===String(data.id));
+      if(cached) Object.assign(cached, data);
+      // 表示中の振り返りがこの項目なら、別の項目に入れ替えず編集後の内容だけを反映する。
+      const refreshReview = reviewItemId===String(data.id);
       closeDetail(); await loadTimeline();
+      if(uid!==currentUid) return;
+      if(refreshReview){
+        const refreshed = allItems.find(i=>String(i.id)===String(data.id)) || data;
+        renderReview(refreshed);
+      }
     }finally{
       saving = false;
       btn.disabled=false; btn.textContent=label;

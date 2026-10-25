@@ -56,7 +56,10 @@ const el = () => ({textContent:'', innerHTML:'', hidden:false, disabled:false, s
       $:s=>(els[s] ??= el()), esc:s=>String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
       commonsSearchUrl:()=>'#', closeDetail(){}, openDetail(){}, validCoord:()=>null,
       norm:s=>String(s??'').trim(), safeHttpUrl:()=>true, alert(){}, loadTimeline(){ timelines++; },
-      supa:{from:()=>({update:()=>({eq:()=>{ updates++; return new Promise(resolve=>{ resolveUpdate=()=>resolve({error:null}); }); }})})}
+      currentUid:'test-user', allItems:[], reviewItemId:null, renderReview(){},
+      supa:{from:()=>({update:()=>({eq:()=>({eq:()=>({select:()=>({maybeSingle:()=>{
+        updates++; return new Promise(resolve=>{ resolveUpdate=()=>resolve({data:{id:3,name:'項目'},error:null}); });
+      }})})})})})}
     });
     vm.runInContext(slice('function openEdit(item){', 'let detailReturnFocus = null;'), ctx);
     ctx.openEdit({id:1, name:'奉行', type:'役職'});
