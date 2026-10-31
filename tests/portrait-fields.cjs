@@ -20,4 +20,8 @@ for(const field of ['portrait_image_url','portrait_source_url','portrait_credit'
 assert.match(html, /肖像の掲載元・ライセンスを開く/, '掲載元へのリンクを表示する');
 assert.match(html, /AIの抽出・更新では、確認して登録した肖像の出典情報を上書きしない。/, 'AI更新で肖像情報を失わない');
 
-console.log('PASS: portraits use safe URLs, retain their source, and survive AI updates');
+// 画像の読み込みに失敗したとき、空白にならず案内を表示する
+assert.match(html, /class="portrait-error" hidden>肖像画像を読み込めませんでした。<\/div>/, '読み込み失敗時の案内がある');
+assert.match(html, /onerror="this\.style\.display='none'; this\.nextElementSibling\.hidden=false;"/, '失敗時は画像を隠して案内を表示する');
+
+console.log('PASS: portraits use safe URLs, retain their source, survive AI updates, and explain load failures');

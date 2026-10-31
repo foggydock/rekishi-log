@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 
 const html = readFileSync('index.html', 'utf8');
-const start = html.indexOf('let allItems=[], factCounts={};');
+const start = html.indexOf('let allItems=[], factCounts={}, factTextsByItem={};');
 const end = html.indexOf('async function loadTimeline(){');
 const code = html.slice(start, end);
 const ctx = vm.createContext({Map, Date, String, esc:x=>x});

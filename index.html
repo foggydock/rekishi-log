@@ -60,6 +60,7 @@
   .rev-head{font-size:12px;color:var(--muted);margin-bottom:8px}
   .rev-name{font-size:17px;font-weight:600}
   .rev-meta{font-size:12px;color:var(--muted);margin:3px 0 8px}
+  .rev-reason{font-size:12px;color:var(--accent);margin-bottom:4px}
   .rev-sum{font-size:13px;line-height:1.6;max-height:4.8em;overflow-y:auto;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
   .rev-actions{display:flex;gap:8px;margin-top:13px}
   .rev-actions button{flex:1;padding:10px;border:1px solid var(--line);background:var(--surface);color:var(--accent);border-radius:10px;font-size:13px;font-family:inherit;cursor:pointer}
@@ -128,6 +129,7 @@
   .summary{background:var(--accent-soft);border-radius:12px;padding:13px 14px;font-size:15px;margin-bottom:18px}
   .portrait{margin:0 0 18px;padding:13px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
   .portrait img{display:block;width:100%;max-height:260px;object-fit:contain;border-radius:9px;background:#f1efe8}
+  .portrait-error{margin-top:4px;font-size:12px;color:var(--muted)}
   .portrait-credit{margin-top:8px;font-size:12px;color:var(--muted)}
   .portrait-source{display:inline-block;margin-top:8px;color:var(--accent);font-size:13px;font-weight:600;text-decoration:none}
   .portrait-source:hover{text-decoration:underline}
@@ -267,7 +269,7 @@
       <button class="map-toggle" id="map-toggle" style="display:none">🗺 地図で見る</button>
     </div>
     <div class="search-wrap">
-      <input id="search" class="search-box" placeholder="🔍 名前・説明・時代・地域・テーマで検索…">
+      <input id="search" class="search-box" placeholder="🔍 名前・説明・時代・地域・テーマ・積み重ねた事実で検索…">
       <button id="search-clear" class="search-clear" type="button" aria-label="検索を消す" hidden>×</button>
     </div>
     <div id="search-result" class="search-result" role="status" aria-live="polite"></div>
@@ -390,7 +392,8 @@ let lastUpdate = null;
 let searchDebounce = null;
 function itemMatchesSearch(item, query=searchQuery){
   if(!query) return true;
-  const text = [item.name,item.summary,item.era_label,item.region,item.theme,item.type]
+  const factsText = (typeof factTextsByItem!=='undefined' && factTextsByItem[item.id]) || item._factsText || '';
+  const text = [item.name,item.summary,item.era_label,item.region,item.theme,item.type,factsText]
     .filter(Boolean).join(' ').toLocaleLowerCase('ja');
   return text.includes(query.toLocaleLowerCase('ja'));
 }
@@ -917,7 +920,7 @@ function showUpdateDetail(){
 }
 
 /* ---------- 年表 ---------- */
-let allItems=[], factCounts={};
+let allItems=[], factCounts={}, factTextsByItem={};
 // 振り返りと年表で同じ利用者の項目一覧を再利用する。利用者が変われば必ず取り直す。
 let itemCacheOwnerId = null;
 let itemNumbers = new Map();
@@ -938,7 +941,11 @@ function applyTimelineData(items, facts){
   allItems = items||[];
   itemCacheOwnerId = typeof currentUid==='string' ? currentUid : null;
   refreshItemNumbers();
-  factCounts={}; (facts||[]).forEach(f=>factCounts[f.item_id]=(factCounts[f.item_id]||0)+1);
+  factCounts={}; factTextsByItem={};
+  (facts||[]).forEach(f=>{
+    factCounts[f.item_id]=(factCounts[f.item_id]||0)+1;
+    if(f.fact_text) factTextsByItem[f.item_id] = factTextsByItem[f.item_id] ? factTextsByItem[f.item_id]+' '+f.fact_text : f.fact_text;
+  });
 }
 async function loadTimeline(){
   const wrap=$('#tl-wrap');
@@ -947,7 +954,7 @@ async function loadTimeline(){
   let items, facts;
   try{
     items = await fetchAllRows('hist_items','*',q=>q.order('sort_year',{ascending:true,nullsFirst:false}).order('id',{ascending:true}));
-    facts = await fetchAllRows('hist_facts','item_id');
+    facts = await fetchAllRows('hist_facts','item_id,fact_text');
   }catch(e){ if(uid!==currentUid) return; console.error(e); wrap.innerHTML='<div class="empty">読み込みに失敗しました</div>'; return; }
   // 読み込み中にログアウト・別アカウントへ切り替わったら、前の利用者の一覧は使わない
   if(uid!==currentUid) return;
@@ -1001,12 +1008,17 @@ function pickReview(){
     r -= weights[k];
     if(r <= 0){ i = candidates[k]; break; }
   }
-  renderReview(i);
+  renderReview(i, reviewReason(i, now));
+}
+function reviewReason(i, now=Date.now()){
+  if(!i.last_reviewed_at) return 'まだ振り返っていない項目です';
+  const days = Math.floor((now - new Date(i.last_reviewed_at).getTime())/86400000);
+  return days<=0 ? '今日はじめて振り返る項目です' : `前回の振り返りから${days}日たっています`;
 }
 // 編集後に、表示中の振り返りだけを新しい内容で描き直せるようにしておく。
 // 別の項目を抽選し直すと「保存した項目が消えた」ように見えるため、ここでは選び直さない。
 let reviewItemId = null;
-function renderReview(i){
+function renderReview(i, reason=reviewReason(i)){
   reviewItemId=String(i.id);
   const wrap=$('#review');
   const meta=[i.era_label,i.region,i.theme].filter(Boolean).join(' ・ ');
@@ -1014,6 +1026,7 @@ function renderReview(i){
   wrap.innerHTML=`<div class="rev-card">
     <div class="rev-head">📖 今日の振り返り</div>
     <div class="rev-name">${itemNameHtml(i)} <span class="tag ${typeClass(i.type)}">${esc(i.type||'その他')}</span></div>
+    <div class="rev-reason">${esc(reason)}</div>
     <div class="rev-meta">${esc(meta)}</div>
     ${i.summary?`<div class="rev-sum">${esc(i.summary)}</div>`:''}
     <div class="rev-actions">
@@ -1376,7 +1389,8 @@ async function openDetail(id){
   const portraitSourceUrl = safeHttpUrl(item.portrait_source_url);
   const portraitHtml = item.type==='人物' && (portraitImageUrl || portraitSourceUrl) ? `
     <div class="portrait">
-      ${isDirectImageUrl(portraitImageUrl) ? `<img src="${esc(portraitImageUrl)}" alt="${esc(item.name)}の肖像" loading="lazy" onerror="this.remove()">` : ''}
+      ${isDirectImageUrl(portraitImageUrl) ? `<img src="${esc(portraitImageUrl)}" alt="${esc(item.name)}の肖像" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.hidden=false;">
+      <div class="portrait-error" hidden>肖像画像を読み込めませんでした。</div>` : ''}
       ${(item.portrait_credit || item.portrait_license) ? `<div class="portrait-credit">${esc([item.portrait_credit,item.portrait_license].filter(Boolean).join(' ／ '))}</div>` : ''}
       ${portraitSourceUrl ? `<a class="portrait-source" href="${esc(portraitSourceUrl)}" target="_blank" rel="noopener noreferrer">↗ 肖像の掲載元・ライセンスを開く</a>` : ''}
     </div>` : '';
