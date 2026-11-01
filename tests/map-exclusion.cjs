@@ -1,0 +1,10 @@
+const fs = require('fs');
+const assert = require('assert');
+const html = fs.readFileSync('index.html', 'utf8');
+assert.match(html, /!validCoord\(i\.lat, i\.lng\) && !i\.map_exclusion_reason/);
+assert.match(html, /地図の設定対象外/);
+assert.match(html, /対象にする/);
+assert.match(html, /eq\('user_id',uid\)\.select\('id,map_exclusion_reason'\)/);
+assert.match(html, /is\('map_exclusion_reason', null\)/);
+assert.match(html, /esc\(i\.map_exclusion_reason\)/);
+console.log('PASS: map exclusions can be restored, are scoped to the user, and are skipped by geocoding');

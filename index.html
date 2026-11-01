@@ -1284,10 +1284,14 @@ async function renderMapView(list){
   const gen = mapGen;                              // 読み込み中に再描画が入ったら、この回は捨てる
   const withCoordEntries = list.map(i=>({item:i, coord:validCoord(i.lat, i.lng)})).filter(e=>e.coord);
   const withCoord = withCoordEntries.map(e=>e.item);
-  const without   = list.filter(i=>!validCoord(i.lat, i.lng));
+  const without   = list.filter(i=>!validCoord(i.lat, i.lng) && !i.map_exclusion_reason);
+  const excluded = list.filter(i=>!validCoord(i.lat, i.lng) && i.map_exclusion_reason);
   if(!withCoord.length){
     wrap.innerHTML = `<div class="empty">この条件では、地図に置ける項目がまだありません。<br>
-      「設定」の「地域の項目に座標をつける」を押すと、AIが緯度経度をまとめて付けます。</div>`;
+      「設定」の「地域の項目に座標をつける」を押すと、AIが緯度経度をまとめて付けます。</div>
+      ${without.length ? `<div class="no-coord-h">まだ地図に置けない項目（${without.length}）</div><div class="tl"><div class="tl-group">${without.map(cardHtml).join('')}</div></div>` : ''}
+      ${excluded.length ? `<details><summary class="no-coord-h">地図の設定対象外（${excluded.length}）</summary><div class="tl"><div class="tl-group">${excluded.map(i=>`<div>${cardHtml(i)}<div class="hint">理由：${esc(i.map_exclusion_reason)}</div></div>`).join('')}</div></div></details>` : ''}`;
+    wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
     focusMapItemId = null;   // ここで消しておかないと、次に地図を開いた時に無関係な項目へズームしてしまう
     return;
   }
@@ -1307,7 +1311,8 @@ async function renderMapView(list){
     藩や帝国のように広がりのある場所も、代表となる一地点で表しています。${localFilePreview ? '<br>💡 このPCではファイルを直接開いているため、ローカル閲覧対応の日本語地図を表示しています。' : ''}
     <div id="map-tile-status" class="map-tile-status" role="status" aria-live="polite"></div></div>
     ${without.length ? `<div class="no-coord-h">まだ地図に置けない項目（${without.length}）</div>
-      <div class="tl"><div class="tl-group">${without.map(cardHtml).join('')}</div></div>` : ''}`;
+      <div class="tl"><div class="tl-group">${without.map(cardHtml).join('')}</div></div>` : ''}
+    ${excluded.length ? `<details><summary class="no-coord-h">地図の設定対象外（${excluded.length}）</summary><div class="tl"><div class="tl-group">${excluded.map(i=>`<div>${cardHtml(i)}<div class="hint">理由：${esc(i.map_exclusion_reason)}</div></div>`).join('')}</div></div></details>` : ''}`;
   wrap.querySelectorAll('.card').forEach(c=>c.onclick=()=>openDetail(c.dataset.id));
 
   // 全世界に点が散らばるとfitBoundsがズーム1まで下がり、OSMFJの低詳細タイルでは
@@ -1405,6 +1410,7 @@ async function openDetail(id){
     ${layers}
     ${relatedHtml}
     ${(item.type==='地域' && validCoord(item.lat,item.lng)) ? '<button class="edit-btn" id="d-map">📍地図で見る</button>' : ''}
+    ${(item.type==='地域' && !validCoord(item.lat,item.lng)) ? `<div class="hint">${item.map_exclusion_reason ? `地図の対象外：${esc(item.map_exclusion_reason)}` : '地図に設定できない場合は理由を選べます。'}</div><select id="d-map-reason" aria-label="地図の設定対象外の理由"><option value="">対象にする</option>${['範囲が広すぎる','場所を特定できない','地図のピンが不要','その他'].map(r=>`<option value="${esc(r)}" ${item.map_exclusion_reason===r?'selected':''}>${esc(r)}</option>`).join('')}</select><button class="edit-btn" id="d-map-save">地図の設定を保存</button>` : ''}
     <button class="edit-btn" id="d-edit">この項目を編集</button>
     <button class="edit-btn" id="d-review">${item.review_excluded?'振り返りの対象に戻す':'今後の振り返りに出さない'}</button>
     <div class="hint">振り返りの対象から外しても、記録は年表に残ります。</div>
@@ -1412,6 +1418,22 @@ async function openDetail(id){
   $('#d-close').onclick=closeDetail;
   $('#sheet').querySelectorAll('.rel-chip').forEach(c=>c.onclick=()=>openDetail(c.dataset.rid));
   if($('#d-map')) $('#d-map').onclick=()=>{ closeDetail(); goToMapFor(item); };
+  if($('#d-map-save')) $('#d-map-save').onclick=async()=>{
+    const btn=$('#d-map-save'), uid=currentUid, reason=$('#d-map-reason').value || null;
+    btn.disabled=true;
+    try{
+      const {data,error}=await supa.from('hist_items').update({map_exclusion_reason:reason}).eq('id',item.id).eq('user_id',uid).select('id,map_exclusion_reason');
+      if(error) throw error;
+      if(uid!==currentUid) return;
+      if(!data || data.length!==1 || data[0].map_exclusion_reason!==reason) throw new Error('保存を確認できませんでした。');
+      item.map_exclusion_reason=reason;
+      const cached=allItems.find(i=>String(i.id)===String(item.id));
+      if(cached) cached.map_exclusion_reason=reason;
+      renderTimeline();
+      openDetail(item.id);
+    }catch(e){ alert('地図の設定を保存できませんでした：'+(e.message||e)); }
+    finally{ btn.disabled=false; }
+  };
   $('#d-edit').onclick=()=>openEdit(item);
   $('#d-review').onclick=()=>setReviewExcluded(item, !item.review_excluded, $('#d-review'));
   $('#d-del').onclick=()=>deleteItem(item, $('#d-del'));
@@ -1668,8 +1690,8 @@ $('#btn-geocode').onclick = async ()=>{
   const uid = currentUid;
   let done=0, notFound=0, apiFailed=0, firstErr='';
   try{
-    const items = await fetchAllRows('hist_items','id,name,type,era_label,region,lat,lng', null, geoRetryNote);
-    const targets = (items||[]).filter(i=>i.type==='地域' && !validCoord(i.lat, i.lng));
+    const items = await fetchAllRows('hist_items','id,name,type,era_label,region,lat,lng,map_exclusion_reason', null, geoRetryNote);
+    const targets = (items||[]).filter(i=>i.type==='地域' && !validCoord(i.lat, i.lng) && !i.map_exclusion_reason);
     if(!targets.length){ st.textContent='座標が必要な「地域」の項目はありませんでした。'; b.disabled=false; return; }
     const SIZE = 12;                                  // 1回の出力を短く保つ
     for(let s=0; s<targets.length; s+=SIZE){
@@ -1692,8 +1714,9 @@ $('#btn-geocode').onclick = async ()=>{
         const co = row ? validCoord(o.lat, o.lng) : null;
         if(!row || !co) continue;
         try{
-          await dbRetry(()=>supa.from('hist_items').update({ lat:co.lat, lng:co.lng }).eq('id', row.id), '座標の保存', geoRetryNote);
-          done++;
+          const {data,error}=await supa.from('hist_items').update({ lat:co.lat, lng:co.lng }).eq('id', row.id).eq('user_id', uid).is('map_exclusion_reason', null).select('id');
+          if(error) throw error;
+          if(data && data.length===1) done++;
         }catch(e){
           console.error('座標の保存に失敗:', e);
           apiFailed++;
