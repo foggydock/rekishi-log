@@ -14,7 +14,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 配信の前に tests/ のテストをすべて実行する。1本でも失敗したら、次の配信は動かない。
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: テストをすべて実行する
+        run: |
+          failed=0
+          for f in tests/*.cjs; do
+            echo "== $f"
+            node "$f" || { echo "::error::テストが失敗しました: $f"; failed=1; }
+          done
+          exit $failed
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
