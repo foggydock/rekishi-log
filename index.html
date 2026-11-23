@@ -1409,6 +1409,7 @@ function openEdit(item){
     <div class="ef"><label>並べ替え用の年（西暦の数字・紀元前はマイナス）</label><input id="e-year" type="number" value="${item.sort_year??''}"></div>
     <div class="ef"><label>緯度（地図用・例 35.68／空欄なら地図に出ません）</label><input id="e-lat" type="number" step="any" value="${item.lat??''}"></div>
     <div class="ef"><label>経度（地図用・例 139.77）</label><input id="e-lng" type="number" step="any" value="${item.lng??''}"></div>
+    ${item.type==='地域' ? '<button class="edit-btn" id="e-geo">AIで座標候補を探す</button><div class="hint" id="e-geo-status">候補は確認・修正してから保存できます。</div>' : ''}
     <div class="ef"><label>肖像の画像URL（肖像画・写真・石像など）</label><input id="e-portrait-image" type="url" inputmode="url" placeholder="https://…（画像そのもののURL）" value="${esc(item.portrait_image_url||'')}"></div>
     <div class="ef"><label>肖像の掲載元URL（必須推奨）</label><input id="e-portrait-source" type="url" inputmode="url" placeholder="https://…（Wikimedia Commonsや所蔵館のページ）" value="${esc(item.portrait_source_url||'')}"></div>
     <div class="ef"><label>作者・所蔵先などのクレジット</label><input id="e-portrait-credit" value="${esc(item.portrait_credit||'')}"></div>
@@ -1418,6 +1419,25 @@ function openEdit(item){
     <button class="edit-btn" id="e-back">もどる</button>`;
   $('#e-close').onclick=closeDetail;
   $('#e-back').onclick=()=>openDetail(item.id);
+  if($('#e-geo')) $('#e-geo').onclick=async()=>{
+    const btn=$('#e-geo'), status=$('#e-geo-status'), uid=currentUid;
+    const name=$('#e-name').value.trim();
+    const previousLat=$('#e-lat').value, previousLng=$('#e-lng').value;
+    if(!name){ status.textContent='名前を入れてください。'; return; }
+    btn.disabled=true; status.textContent='候補を探しています…';
+    try{
+      const out=await geocodeBatch([{name,era_label:$('#e-era').value.trim(),region:$('#e-region').value.trim()}], msg=>{ if(btn.isConnected) status.textContent=msg; });
+      if(uid!==currentUid || !btn.isConnected) return;
+      if($('#e-name').value.trim()!==name){ status.textContent='名前が変わったため、もう一度候補を探してください。'; return; }
+      if($('#e-lat').value!==previousLat || $('#e-lng').value!==previousLng){ status.textContent='座標が変更されたため、候補は入力しませんでした。'; return; }
+      const match=out.find(o=>norm(o.name)===norm(name));
+      const co=match && validCoord(match.lat,match.lng);
+      if(!co){ status.textContent='候補を特定できませんでした。座標を手入力できます。'; return; }
+      $('#e-lat').value=co.lat; $('#e-lng').value=co.lng;
+      status.textContent='候補を入力しました。場所と座標を確認・修正してから保存してください。';
+    }catch(e){ if(uid===currentUid && btn.isConnected) status.textContent='候補を取得できませんでした：'+(e.message||e); }
+    finally{ btn.disabled=false; }
+  };
   let saving = false;
   $('#e-save').onclick=async()=>{
     if(saving) return;
