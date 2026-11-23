@@ -1631,7 +1631,7 @@ $('#btn-geocode').onclick = async ()=>{
   b.disabled=true; st.textContent='対象を数えています…';
   const geoRetryNote = msg=>{ st.textContent = msg; };
   const uid = currentUid;
-  let done=0, notFound=0, apiFailed=0, firstErr='';
+  let done=0, notFound=0, apiFailed=0, saveFailed=0, unchanged=0, firstErr='', firstSaveErr='';
   try{
     const items = await fetchAllRows('hist_items','id,name,type,era_label,region,lat,lng,map_exclusion_reason', null, geoRetryNote);
     const targets = (items||[]).filter(i=>i.type==='地域' && !validCoord(i.lat, i.lng) && !i.map_exclusion_reason);
@@ -1660,10 +1660,11 @@ $('#btn-geocode').onclick = async ()=>{
           const {data,error}=await supa.from('hist_items').update({ lat:co.lat, lng:co.lng }).eq('id', row.id).eq('user_id', uid).is('map_exclusion_reason', null).select('id');
           if(error) throw error;
           if(data && data.length===1) done++;
+          else unchanged++;
         }catch(e){
           console.error('座標の保存に失敗:', e);
-          apiFailed++;
-          if(!firstErr) firstErr = '保存できませんでした：' + (e.message||e);
+          saveFailed++;
+          if(!firstSaveErr) firstSaveErr = e.message||String(e);
         }
         byName.delete(norm(o.name));   // 成功・失敗どちらでも「未反映」からは外す（notFoundとの二重計上を防ぐ）
       }
@@ -1672,7 +1673,9 @@ $('#btn-geocode').onclick = async ()=>{
     if(uid!==currentUid){ b.disabled=false; return; }
     let msg = `${done}件に座標を付けました。`;
     if(notFound)  msg += `（${notFound}件はAIが場所を特定できませんでした。項目の編集画面から手で入れられます）`;
+    if(unchanged) msg += `（${unchanged}件は保存対象が変わったため反映されませんでした。再読み込みして確認してください）`;
     if(apiFailed) msg += `（${apiFailed}件はAIへの問い合わせ自体が失敗しました。理由：${firstErr}）`;
+    if(saveFailed) msg += `（${saveFailed}件は座標の保存に失敗しました。理由：${firstSaveErr}）`;
     st.textContent = msg;
     // 次に年表・振り返りを開くとき読み直す（取得済みの印も外さないと、振り返りが空のまま表示されない）
     allItems = []; itemCacheOwnerId = null;
